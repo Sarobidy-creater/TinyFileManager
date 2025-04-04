@@ -1,0 +1,1954 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <sys/file.h>
+#include <unistd.h>// Inclusion nécessaire pour flock()
+
+#define MAX_FILE_NAME 255
+#define NUM_BLOCKS 1024  // Nombre de blocs dans la partition simulée
+#define BLOCK_SIZE 512   // Taille d'un bloc en octets
+#define NUM_INODES 256   // Nombre d'inodes
+#define NUM_DIRECTORY_ENTRIES 256  // Nombre d'entrées dans un répertoire
+#define MAX_FILE_OPEN 64 // Nombre maximum de fichier ouvert simultanément
+
+// Structure représentant un inode
+typedef struct inode {
+    int id;                             // ID de l'inode
+    int type;                           // 0 = rep, 1 = fichier, 2 = lien symb
+    int size;                           // Taille du fichier (en octets)
+    time_t creation_time;               // Date de création du fichier
+    time_t modification_time;           // Date de dernière modification
+    char permissions[3];                // Permissions: read, write, execute (rw, rwx, etc.)
+    int blocks[NUM_BLOCKS];             // Bloc de données alloués (indexés dans le fichier)
+    int link_count;                     // Nombre de liens durs pointant vers cet inode
+    int inode_rep_parent;               // Index de l'inode du répertoire parent
+} Inode;
+
+// Structure représentant une entrée de répertoire
+typedef struct directory_entry {
+    char filename[MAX_FILE_NAME];  // Nom du fichier dans le répertoire
+    int inode_index;               // Index de l'inode du fichier
+} DirectoryEntry;
+
+// Structure représentant un répertoire
+typedef struct directory {
+    DirectoryEntry entries[NUM_DIRECTORY_ENTRIES]; // Entrées du répertoire
+} Directory;
+
+typedef struct {
+    int inode;          // Numéro d'inode du fichier ouvert
+    int tete_lecture;   // Emplacement du tete de lecture
+} OpenFile;
+
+// Structure représentant un fichier de partition simulé
+typedef struct filesystem {
+    FILE *file;                         // Fichier simulant la partition
+    Inode inodes[NUM_INODES];           // Tableau d'inodes
+    Directory root_dir;                 // Répertoire racine
+    Directory directories[NUM_INODES];  // Liste des répertoire indexé par les index d'inode 
+    int free_blocks[NUM_BLOCKS];        // Tableau de blocs libres
+    int current_dir;                    // Inode du repertoire courant
+    OpenFile opened_file[MAX_FILE_OPEN];  // Inodes ouvert indicé par les descripteur de fichier
+} Filesystem;
+
+Filesystem fs;  // Instance globale du système de fichiers
+
+// Fonction pour initialiser le système de fichiers
+void init_filesystem(const char *filename) {
+    fs.file = fopen(filename, "wb+");  // Ouverture en mode binaire
+    if (!fs.file) {
+        perror("Erreur lors de l'ouverture du fichier système de fichiers");
+        exit(1);
+    }
+
+    // Initialisation des blocs libres
+    for (int i = 0; i < NUM_BLOCKS; i++) {
+        fs.free_blocks[i] = 0;  // 0 = libre
+    }
+
+    // Initialisation des inodes (simuler les inodes vides)
+    for (int i = 0 ; i < NUM_INODES ; i++) {
+        fs.inodes[i].id = i;
+        fs.inodes[i].size = -1;
+        fs.inodes[i].type = -1;
+        fs.inodes[i].creation_time = time(NULL);
+        fs.inodes[i].modification_time = time(NULL);
+        fs.inodes[i].inode_rep_parent = -1;
+        memset(fs.inodes[i].permissions, 0, 3);
+        memset(fs.inodes[i].blocks, -1, NUM_BLOCKS * sizeof(int));  // Bloc non alloué
+        fs.inodes[i].link_count = 0;  // Aucun lien
+        for (int j = 1 ; j < NUM_DIRECTORY_ENTRIES ; j++){
+            fs.directories[i].entries[j].inode_index = -1;
+            memset(fs.directories[i].entries[j].filename, 0, MAX_FILE_NAME * sizeof(char));
+        }
+    }
+
+    for (int i ; i < MAX_FILE_OPEN ; i++) {
+        fs.opened_file[i].inode = -1;
+        fs.opened_file[i].tete_lecture = -1;
+    }
+
+    char buf[2];
+    buf[0] = '\0';
+
+    for(int i = sizeof(Filesystem) ; i < sizeof(Filesystem) + NUM_BLOCKS*BLOCK_SIZE ; i++){
+        fseek(fs.file, i, SEEK_SET);
+        fwrite(buf, sizeof(char), 1, fs.file);
+    }
+
+
+    // Initialisation du répertoire racine
+    Directory root;
+    for(int i = 0 ; i < NUM_DIRECTORY_ENTRIES ; i++){
+        memset(root.entries[i].filename, 0, MAX_FILE_NAME * sizeof(char));
+        root.entries[i].inode_index = -1;
+    }
+    fs.root_dir = root;
+
+    fs.directories[0] = fs.root_dir;
+    fs.inodes[0].size = 0;
+    fs.inodes[0].type = 0;
+    fs.inodes[0].creation_time = time(NULL);
+    fs.inodes[0].modification_time = time(NULL);
+    fs.inodes[0].inode_rep_parent = 0;
+    strncpy(fs.inodes[0].permissions, "rwx", 3);
+
+    fs.current_dir = 0;
+
+    printf("fs size : %d\n", sizeof(Filesystem));
+
+    //fclose(fs.file);
+    //fs.file = fopen(filename, "rb+");
+}
+
+// Fonction pour allouer un bloc de données libre
+int allocate_block() {
+    for (int i = 0; i < NUM_BLOCKS; i++) {
+        if (fs.free_blocks[i] == 0) {
+            fs.free_blocks[i] = 1;  // Marquer le bloc comme alloué
+            return i;
+        }
+    }
+    return -1;  // Aucun bloc libre trouvé
+}
+
+// Fonction pour libérer un bloc
+void free_block(int block_index) {
+    if (block_index >= 0 && block_index < NUM_BLOCKS) {
+        fs.free_blocks[block_index] = 0;  // Marquer le bloc comme libre
+    } else {
+        printf("Erreur: tentative de libération d'un bloc invalide (%d).\n", block_index);
+    }
+}
+
+
+
+// Fonction pour rechercher un inode a partir du nom de fichier
+int rechInode(const char *filename, Directory dir){
+    int inode = -1;
+    int i = 0;
+
+    //chercher le numero d'inode du fichier dans le repertoire
+    while (i<NUM_DIRECTORY_ENTRIES && inode==-1){
+        if (strcmp(filename, dir.entries[i].filename) == 0){
+            inode = dir.entries[i].inode_index;
+        }
+        i++;
+    }
+    return inode;
+}
+
+// Fonction pour rechercher un espace libre dans un répertoire²
+int rechEntree(int dir_inode){
+    int index = -1;
+    int i = 0;
+    Directory dir = fs.directories[dir_inode];
+
+    // Chercher une entrée libre
+    while(i<NUM_DIRECTORY_ENTRIES && index==-1){
+        if (dir.entries[i].inode_index == -1){
+            index = i;
+        }
+        i++;
+    }
+    return index;
+}
+
+
+// Fonction pour créer un fichier dans un répertoire
+int create_file(const char *filename, const char *permissions, int dir_inode) {
+    // Répertoire où on va créer le fichier
+    Directory *dir = &fs.directories[dir_inode];
+    int inode_index = -1;
+
+    // Vérifier si le fichier existe dans le répertoire
+    if (rechInode(filename, *dir) != -1){
+        printf("Erreur de création, un fichier de même nom existe déjà dans le répertoire\n");
+        return -1;
+    }
+
+    // Trouver un inode libre
+    for (int i = 0; i < NUM_INODES; i++) {
+        if (fs.inodes[i].size == -1) { 
+            inode_index = i;
+            fs.inodes[i].size = 0; // Marquer comme utilisé
+            break;
+        }
+    }
+
+    // Vérifier si on a trouvé un inode libre
+    if (inode_index == -1) {
+        printf("Erreur: Aucun inode libre.\n");
+        return -1;
+    }
+
+    Inode *inode = &fs.inodes[inode_index];
+
+    // Allouer uniquement 1 bloc pour commencer
+    int block = allocate_block();
+    if (block == -1) {
+        printf("Erreur: Pas de blocs libres disponibles.\n");
+        inode->size = -1; // Marquer l'inode comme inutilisé
+        return -1;
+    }
+
+    // Chercher un espace libre dans le répertoire
+    int index_rep = rechEntree(dir_inode);
+    if(index_rep == -1){
+        printf("Erreur: Aucun espace dans le répertoire.\n");
+        free_block(block); // Libérer le bloc alloué
+        inode->size = -1; // Marquer l'inode comme inutilisé
+        return -1;
+    }
+
+    // Ajouter le fichier au répertoire
+    strncpy(dir->entries[index_rep].filename, filename, MAX_FILE_NAME);
+    dir->entries[index_rep].inode_index = inode_index;
+    printf("Fichier '%s' créé avec succès.\n", filename);
+
+    // Initialiser l'inode
+    inode->blocks[0] = block;
+    inode->type = 1;
+    inode->creation_time = time(NULL);
+    inode->modification_time = time(NULL);
+    inode->inode_rep_parent = dir_inode;
+    strncpy(inode->permissions, permissions, 3);
+
+    printf("block : %d\n", block);
+
+    return inode_index;
+}
+
+// Fonction pour supprimer un fichier (non répertoire)
+void delete_file(char *filename, int dir_inode) {
+    // Répertoire où le fichier se situe
+    Directory *dir = &fs.directories[dir_inode];
+    int inode_index = rechInode(filename, *dir);
+
+    // Vérifier si le fichier existe
+    if(inode_index == -1){
+        printf("Erreur: Fichier inexistant.\n");
+    } else {
+        Inode *inode = &fs.inodes[inode_index];
+
+        // Libérer tous les blocs associés
+        for (int i = 0; i < NUM_BLOCKS; i++) {
+            if (inode->blocks[i] != -1) {
+                free_block(inode->blocks[i]);
+                inode->blocks[i] = -1;
+            }
+        }
+
+        inode->size = -1; // Marquer l'inode comme libre
+        inode->type = -1;
+        inode->creation_time = time(NULL);
+        inode->modification_time = time(NULL);
+        inode->link_count = 0;
+        inode->inode_rep_parent = -1;
+
+        // Supprimer l'entrée du répertoire
+        int i = 0;
+        while (inode_index != -1) {
+            if (dir->entries[i].inode_index == inode_index && strcmp(filename,dir->entries[i].filename) == 0) { // Vérifier le nom du fichier au cas où on a un lien dur
+                dir->entries[i].inode_index = -1;
+                memset(dir->entries[i].filename, 0, MAX_FILE_NAME);
+                inode_index = -1;
+            }
+            i++;
+        }
+
+        printf("Fichier supprimé avec succès.\n");
+    }
+}
+
+
+
+/**
+ * Supprime un répertoire vide du système de fichiers.
+ *
+ * @param dirname    Le nom du répertoire à supprimer.
+ * @param parent_dir L'inode du répertoire parent (celui qui contient dirname).
+ * @return 0 si la suppression réussit, -1 en cas d'erreur.
+ */
+int delete_directory(const char *dirname, int parent_dir) {
+    // 1) Trouver l'inode du répertoire à supprimer en cherchant dirname dans le répertoire parent
+    int dir_inode = rechInode(dirname, fs.directories[parent_dir]);
+    if (dir_inode == -1) {
+        printf("Erreur: Le répertoire '%s' n'existe pas dans le répertoire %d.\n", dirname, parent_dir);
+        return -1;
+    }
+
+    // 2) Vérifier que c'est bien un répertoire
+    if (fs.inodes[dir_inode].type != 0) {  // 0 = répertoire
+        printf("Erreur: '%s' n'est pas un répertoire.\n", dirname);
+        return -1;
+    }
+
+    // Supprimer récursivement
+    Directory *dir_to_delete = &fs.directories[dir_inode];
+    for (int i = 0; i < NUM_DIRECTORY_ENTRIES; i++) {
+        if (dir_to_delete->entries[i].inode_index != -1) {
+            int inode = dir_to_delete->entries[i].inode_index;
+            printf("inode %d\n", inode);
+            if (fs.inodes[inode].type == 0){
+                delete_directory(dir_to_delete->entries[i].filename, dir_inode);
+            }
+
+            if (fs.inodes[inode].type == 1 || fs.inodes[inode].type == 2){
+                delete_file(dir_to_delete->entries[i].filename, dir_inode);
+            }
+
+            //Gérer aussi les lien symbolique
+
+        }
+    }
+
+    // 4) Supprimer l'entrée correspondant à ce répertoire dans le parent
+    Directory *parent_directory = &fs.directories[parent_dir];
+    for (int i = 0; i < NUM_DIRECTORY_ENTRIES; i++) {
+        if (parent_directory->entries[i].inode_index == dir_inode &&
+            strcmp(parent_directory->entries[i].filename, dirname) == 0)
+        {
+            parent_directory->entries[i].inode_index = -1;
+            memset(parent_directory->entries[i].filename, 0, MAX_FILE_NAME);
+            break;
+        }
+    }
+
+    // 5) Libérer l'inode du répertoire
+    Inode *inode_ptr = &fs.inodes[dir_inode];
+    inode_ptr->size = -1;
+    inode_ptr->type = -1;
+    inode_ptr->creation_time = time(NULL);
+    inode_ptr->modification_time = time(NULL);
+    inode_ptr->inode_rep_parent = -1;
+    inode_ptr->link_count = 0;
+    for (int i = 0; i < NUM_BLOCKS; i++) {
+        if (inode_ptr->blocks[i] != -1) {
+            // Normalement, un répertoire n'a pas de blocs de données, mais par sécurité :
+            free_block(inode_ptr->blocks[i]);
+            inode_ptr->blocks[i] = -1;
+        }
+    }
+
+    printf("Le répertoire '%s' a été supprimé avec succès.\n", dirname);
+    return 0;
+}
+
+
+/**
+ * Crée un répertoire dans le système de fichiers simulé.
+ *
+ * @param dirname Nom du répertoire à créer.
+ * @return L'index de l'inode du répertoire créé, ou -1 en cas d'erreur.
+ */
+ int create_directory(const char *dirname, int inode_dir) {
+    int inode_index = -1;
+
+    // Rechercher un inode libre pour stocker le répertoire
+    int i = 0;
+    while (i < NUM_INODES && inode_index == -1) {
+        if (fs.inodes[i].size == -1) {  // Un inode libre a une taille de -1
+            inode_index = i;
+        }
+        i++;
+    }
+
+    // Vérifier si un inode a été trouvé
+    if (inode_index == -1) {
+        printf("Erreur: Aucun inode libre pour créer un répertoire.\n");
+        return -1;
+    }
+
+    Directory *dir = &fs.directories[inode_dir];
+
+    //Vérifier si le fichier existe dans le répertoire
+    if (rechInode(dirname, *dir) != -1){
+        printf("Erreur de création, un fichier de même nom existe déjà dans le répertoire\n");
+        return -1;
+    }
+
+    // Chercher une entrée libre dans le répertoire
+    int index = rechEntree(inode_dir);
+    if (index == -1){
+        printf("Erreur: Pas d'espace libre dans le répertoire.\n");
+        return -1;
+    }
+
+    Directory *new_dir = &fs.directories[inode_index];
+
+    // Initialisation de l'inode pour le répertoire
+    Inode *inode = &fs.inodes[inode_index];
+    inode->size = 0;  // Un répertoire commence vide
+    inode->type = 0;
+    inode->inode_rep_parent = inode_dir;
+    inode->creation_time = time(NULL);
+    inode->modification_time = time(NULL);
+    strncpy(inode->permissions, "rwx", 3);  // Lecture, écriture et exécution
+    inode->link_count = 1;  // Le répertoire est lié à lui-même
+
+    // Aucun bloc n'est alloué directement
+    for (int i = 0; i < NUM_BLOCKS; i++) {
+        inode->blocks[i] = -1;
+    }
+
+    //Initialiser les entrées du répertoire
+    for(int i = 0 ; i < NUM_DIRECTORY_ENTRIES ; i++){
+        memset(new_dir->entries[i].filename, 0, MAX_FILE_NAME * sizeof(char));
+        new_dir->entries[i].inode_index = -1;
+    }
+
+    // Ajouter le répertoire au répertoire parent
+    strncpy(dir->entries[index].filename, dirname, MAX_FILE_NAME);
+    dir->entries[index].inode_index = inode_index;
+    printf("Répertoire '%s' créé avec succès.\n", dirname);
+    return inode_index;
+}
+
+
+
+
+
+
+/**
+ * Déplace un répertoire (et son contenu) d'un répertoire parent source vers un répertoire parent destination.
+ *
+ * @param srcDirName   Le nom du répertoire à déplacer.
+ * @param srcParentDir L'inode du répertoire parent source.
+ * @param dstParentDir L'inode du répertoire parent destination.
+ * @return 0 si la réussite, -1 si erreur.
+ */
+ int move_directory(const char *srcDirName, int srcParentDir, int dstParentDir) {
+    // 1) Récupérer l'inode du répertoire source
+    int srcDirInode = rechInode(srcDirName, fs.directories[srcParentDir]);
+    if (srcDirInode == -1) {
+        printf("Erreur : Le répertoire '%s' n'existe pas dans le répertoire %d.\n", srcDirName, srcParentDir);
+        return -1;
+    }
+
+    // 2) Vérifier que c'est bien un répertoire
+    if (fs.inodes[srcDirInode].type != 0) {
+        printf("Erreur : '%s' n'est pas un répertoire.\n", srcDirName);
+        return -1;
+    }
+
+    // 3) Vérifier qu'il n'y a pas déjà un répertoire (ou fichier) du même nom dans la destination
+    if (rechInode(srcDirName, fs.directories[dstParentDir]) != -1) {
+        printf("Erreur : Le nom '%s' existe déjà dans le répertoire %d.\n", srcDirName, dstParentDir);
+        return -1;
+    }
+
+    // 4) Ajouter une entrée dans le répertoire destination
+    int dstIndex = rechEntree(dstParentDir);
+    if (dstIndex == -1) {
+        printf("Erreur : Pas d'espace libre dans le répertoire %d.\n", dstParentDir);
+        return -1;
+    }
+    Directory *destDir = &fs.directories[dstParentDir];
+    strncpy(destDir->entries[dstIndex].filename, srcDirName, MAX_FILE_NAME);
+    destDir->entries[dstIndex].inode_index = srcDirInode;
+
+    // 5) Supprimer l'entrée du répertoire source
+    Directory *sourceDir = &fs.directories[srcParentDir];
+    for (int i = 0; i < NUM_DIRECTORY_ENTRIES; i++) {
+        if (sourceDir->entries[i].inode_index == srcDirInode &&
+            strcmp(sourceDir->entries[i].filename, srcDirName) == 0)
+        {
+            sourceDir->entries[i].inode_index = -1;
+            memset(sourceDir->entries[i].filename, 0, MAX_FILE_NAME);
+            break;
+        }
+    }
+
+    // 6) Mettre à jour l'inode du répertoire pour pointer vers son nouveau parent
+    fs.inodes[srcDirInode].inode_rep_parent = dstParentDir;
+    fs.inodes[srcDirInode].modification_time = time(NULL);
+
+    printf("Répertoire '%s' (inode %d) déplacé de %d vers %d.\n", srcDirName, srcDirInode, srcParentDir, dstParentDir);
+    return 0;
+}
+
+/**
+ * Retourne l'inode correspondant à un chemin (absolu ou relatif) dans le système de fichiers.
+ *
+ * @param path          Le chemin (ex: "/home/user/file.txt" ou "docs/fichier1.txt")
+ * @param current_dir   L'inode du répertoire courant (utilisé si le chemin n'est pas absolu)
+ * @return L'inode du fichier/répertoire pointé par 'path', ou -1 en cas d'erreur.
+ */
+ int get_inode_from_path(const char *path, int current_dir) {
+    // 1) Déterminer si le chemin est absolu ou relatif
+    int inode = 0;  // Par défaut, la racine
+    if (path[0] != '/') {
+        // Chemin relatif => partir du répertoire courant
+        inode = current_dir;
+    }
+
+    // 2) Copie du chemin local pour strtok (car strtok modifie la chaîne)
+    char tempPath[1024];
+    memset(tempPath, 0, sizeof(tempPath));
+    strncpy(tempPath, path, sizeof(tempPath) - 1);
+
+    // 3) Découper par les "/"
+    char *token = strtok(tempPath, "/");
+    while (token != NULL) {
+        // Ignorer les "." (rester dans le même répertoire)
+        if (strcmp(token, ".") == 0) {
+            // On ne change rien
+        }
+        else {
+            // aller au repertoire parent si on a ".."
+            if (strcmp(token, "..") == 0){
+                inode = fs.inodes[inode].inode_rep_parent;
+            } else {
+
+                // 3.1) Chercher le token dans le répertoire inode actuel
+                int foundInode = rechInode(token, fs.directories[inode]);
+                if (foundInode == -1) {
+                    // Pas trouvé
+                    printf("Erreur : '%s' est introuvable dans le répertoire inode %d.\n", token, inode);
+                    return -1;
+                }
+                // 3.2) Mettre à jour l'inode actuel
+                inode = foundInode;
+            }
+        }
+
+        token = strtok(NULL, "/");
+    }
+
+    // 4) inode final
+    return inode;
+}
+
+
+/**
+ * Crée un lien symbolique (symlink) vers une cible (targetPath), dans le répertoire parent parentDir.
+ *
+ * @param linkName   Nom du lien symbolique (ex: "lien_symb")
+ * @param targetPath Chemin vers la cible (ex: "/home/user/fichier.txt" ou "fichier2.txt")
+ * @param parentDir  Inode du répertoire dans lequel on crée le lien symbolique
+ * @return L'inode du lien symbolique créé, ou -1 en cas d'erreur
+ */
+ int create_symbolic_link(const char *linkName, const char *targetPath, int parentDir) {
+    // 1) Vérifier si un fichier ou répertoire du même nom existe déjà dans parentDir
+    int existingInode = rechInode(linkName, fs.directories[parentDir]);
+    if (existingInode != -1) {
+        printf("Erreur : Le nom '%s' existe déjà dans le répertoire inode %d.\n", linkName, parentDir);
+        return -1;
+    }
+
+    // 2) Trouver un inode libre
+    int symlinkInode = -1;
+    for (int i = 0; i < NUM_INODES; i++) {
+        if (fs.inodes[i].size == -1) {  // -1 signifie inode libre
+            symlinkInode = i;
+            break;
+        }
+    }
+    if (symlinkInode == -1) {
+        printf("Erreur : Pas d'inode libre pour créer le lien symbolique.\n");
+        return -1;
+    }
+
+    // 3) Chercher une entrée libre dans le répertoire parent
+    int dirIndex = rechEntree(parentDir);
+    if (dirIndex == -1) {
+        printf("Erreur : Pas d'espace libre dans le répertoire inode %d.\n", parentDir);
+        return -1;
+    }
+
+    // 4) Allouer un bloc pour stocker la chaîne de la cible (targetPath)
+    int blockIndex = allocate_block();
+    if (blockIndex == -1) {
+        printf("Erreur : Pas de blocs libres pour créer le lien symbolique.\n");
+        return -1;
+    }
+
+    printf("block index : %d", blockIndex);
+
+    // 5) Initialiser l'inode du lien symbolique
+    Inode *inodePtr = &fs.inodes[symlinkInode];
+    inodePtr->size = sizeof(targetPath);                   // La 'taille' du lien peut représenter la taille de la chaîne si on veut
+    inodePtr->type = 2;                   // 2 = lien symbolique
+    inodePtr->creation_time = time(NULL);
+    inodePtr->modification_time = time(NULL);
+    inodePtr->inode_rep_parent = parentDir;
+    inodePtr->link_count = 1;             // Au moins un lien (ce lien lui-même)
+    strncpy(inodePtr->permissions, "rwx", 3);  // Par exemple, autoriser la lecture/exec du lien
+
+    // Mettre tous les blocs à -1, sauf celui qu’on vient d’allouer
+    for (int i = 0; i < NUM_BLOCKS; i++) {
+        inodePtr->blocks[i] = -1;
+    }
+    inodePtr->blocks[0] = blockIndex;
+
+    // 6) Écrire la chaîne targetPath dans le bloc alloué
+    
+        // Préparer un buffer temporaire
+        //char buffer[BLOCK_SIZE];
+        // memset(buffer, 0, BLOCK_SIZE);
+        // Copier la chaîne targetPath (en s’assurant de pas déborder)
+        //strncpy(buffer, targetPath, BLOCK_SIZE - 1);
+
+        int i = 0;
+
+        while (*(targetPath+i) != '\0'){
+            fseek(fs.file, sizeof(Filesystem) + blockIndex * BLOCK_SIZE + i, SEEK_SET);
+            fwrite(targetPath+i, sizeof(char), 1, fs.file);
+            i++;
+        }
+
+
+        fseek(fs.file, sizeof(Filesystem) + blockIndex * BLOCK_SIZE + i, SEEK_SET);
+        fwrite(targetPath+i, sizeof(char), 1, fs.file);
+
+
+        // Se positionner dans le fichier partition (filesystem.img) au bon bloc
+        //fseek(fs.file, blockIndex * BLOCK_SIZE, SEEK_SET);
+        // Écrire le buffer dans ce bloc
+        //fwrite(buffer, sizeof(char), strlen(targetPath), fs.file);
+    
+
+    // 7) Ajouter l'entrée (linkName) dans le répertoire parent
+    Directory *dirPtr = &fs.directories[parentDir];
+    strncpy(dirPtr->entries[dirIndex].filename, linkName, MAX_FILE_NAME);
+    dirPtr->entries[dirIndex].inode_index = symlinkInode;
+
+    printf("Lien symbolique '%s' (inode %d) créé, pointant vers '%s'.\n", linkName, symlinkInode, targetPath);
+    return symlinkInode;
+}
+
+
+// Fonction pour ouvrir un fichier (renvoie un int = descripteur)
+int open_file (const char *filename, int dir_inode){
+    // On cherche le repertoire parent et l'inode
+    Directory dir = fs.directories[dir_inode];
+    int inode = rechInode(filename, dir);
+    int i = 0;
+    int desc = -1;
+
+    if (inode == -1){
+        printf("Erreur : fichier non ouvert.\n");
+    }
+
+    // On crée un nouveau descripteur de fichier
+    while (desc == -1 && i<MAX_FILE_OPEN){
+        if (fs.opened_file[i].inode == -1){
+            fs.opened_file[i].inode = inode;
+            fs.opened_file[i].tete_lecture = sizeof(Filesystem) + fs.inodes[inode].blocks[0]*BLOCK_SIZE;
+            printf("lecteur : %d \n", fs.opened_file[i].tete_lecture);
+            desc = i;
+        }
+        i++;
+    }
+
+    // Vérifier si on a réussi a créer un descripteur
+    if (desc == -1){
+        printf("Erreur : fichier non ouvert.\n");
+    }
+    return desc;
+}
+
+// Fonction pour ecrire dans un fichier (renvoie la taille du fichier apres ecriture)
+int write_file(int desc, const char *texte, int size){
+    // Vérifier si le descripteur est valide
+    if (desc > MAX_FILE_OPEN || desc < 0 || fs.opened_file[desc].inode == -1){
+        printf("Erreur : descrpiteur invalide\n");
+        return -1;
+    } else if(size < 0) {
+        printf("Erreur : taille négatif\n");
+        return -1;
+    }
+    
+    // tableau pour lire si on a ecrit un nouveau charactere ou non
+    char texte_tmp[1];
+    memset(texte_tmp, 0, sizeof(char));
+    texte_tmp[0] = '\0';
+
+    // Tete de lecture/ecriture et inode du fichier
+    int lecteur = fs.opened_file[desc].tete_lecture;
+    int inode = fs.opened_file[desc].inode;
+
+    printf("début lecteur : %d \n", lecteur);
+
+    // index des blocs du fichier a ecrire
+    int block_index = -1;
+
+    // taille supplémentaire du fichier
+    int maj_size = 0;
+
+    // on cherche le numéro de bloc a ecrire
+    int i = 0;
+    int num_block;
+    while (block_index == -1 && i<NUM_BLOCKS){
+        num_block = fs.inodes[inode].blocks[i];
+        // Si la tete de lecture se trouve entre le bloc et le bloc suivant, on recupere le bloc
+        if (sizeof(Filesystem) + num_block*BLOCK_SIZE <= lecteur && lecteur < sizeof(Filesystem) + (num_block+1)*BLOCK_SIZE){
+            block_index = i;
+        }
+        i++;
+    }
+
+
+    // Vérifier si la tete de lecture est bien dans le fichier
+    if(block_index == -1){
+        printf("Erreur : la tête de lecture n'est pas dans le fichier.\n");
+        return -1;
+    } else {
+        // On écrit dans le bloc tant que le bloc n'est pas complet
+        int j = 0;
+        while (j<size && lecteur <= sizeof(Filesystem) + (num_block+1)*BLOCK_SIZE){
+            //printf("\n\ndebug %d\n\n", j);
+            // On se positionne pour ecrire
+            fseek(fs.file, lecteur, SEEK_SET);
+            // On lit pour verifier si il y a des caracteres ecrit (pour mettre a jour la taille)
+            fread(texte_tmp, sizeof(char),1,fs.file);
+            // On se repositionne pour ecrire
+            fseek(fs.file, -1, SEEK_CUR);
+            // On met a jour la taille si il n'y avait rien d'ecrit
+            if (texte_tmp[0]  == '\0'){
+                maj_size++;
+                fs.inodes[inode].size = fs.inodes[inode].size + 1;
+                texte_tmp[0] = '\0';
+            }
+            // On ecrit
+            fwrite(texte+j, sizeof(char), 1, fs.file);
+            j++;
+            lecteur++;
+        }
+        int stop = 0;
+        // On réitère le processus précédent tant qu'il y a de la place a ecrire
+        while (j<size && !stop){
+            block_index++;
+            num_block = fs.inodes[inode].blocks[block_index];
+            // On alloue de la memoire si il ne reste plus aucun bloc
+            if (num_block == -1){
+                num_block = allocate_block();
+                fs.inodes[inode].blocks[block_index] = num_block;
+            }
+
+            if(num_block == -1){
+                stop = 1;
+                printf("Erreur : ordinateur saturé !!!! (aucun bloc disponible)\n");
+            } else {
+                // On se positionne dans le bloc
+                lecteur = sizeof(Filesystem) + num_block*BLOCK_SIZE;
+                // Même processus pour ecrire dans le bloc + maj de la taille
+                while(j<size && lecteur <= sizeof(Filesystem) + (num_block+1)*BLOCK_SIZE){ 
+                    fseek(fs.file, lecteur, SEEK_SET);
+                    fread(texte_tmp, sizeof(char),1,fs.file);
+                    fseek(fs.file, -1, SEEK_CUR);
+                    if (texte_tmp[0] == '\0'){
+                        maj_size++;
+                        fs.inodes[inode].size = fs.inodes[inode].size + 1;
+                        texte_tmp[0] = '\0';
+                    }
+                    fwrite(texte+j, sizeof(char), 1, fs.file);
+                    j++;
+                    lecteur++;
+                }
+            }
+        }
+
+    }
+    fs.opened_file[desc].tete_lecture = lecteur;
+    printf("fin lecteur : %d \n", lecteur);
+    return maj_size;
+
+}
+
+// Fonction pour lire un fichier
+void read_file(int desc, char *texte, int size){
+
+    // Vérifier si le descripteur est valide
+    if (desc > MAX_FILE_OPEN || desc < 0 || fs.opened_file[desc].inode == -1){
+        printf("Erreur : descrpiteur invalide\n");
+    } else if(size < 0) {
+        printf("Erreur : taille négatif\n");
+    } else {    
+        // allouer la memoire pour ecrire dans le buffer
+        // memset(texte, 0, size*sizeof(char));
+
+        // tete de lecture et inode du fichier
+        int lecteur = fs.opened_file[desc].tete_lecture;
+        int inode = fs.opened_file[desc].inode;
+
+        printf("début lecteur : %d \n", lecteur);
+
+        // chercher l'index du bloc du fichier a lire et le numero du bloc dans le file system
+        int block_index = -1;
+        int i = 0;
+        int num_block;
+        while (block_index == -1 && i<NUM_BLOCKS){
+            // Si la tete de lecture se trouve entre le bloc et le bloc suivant, on recupere le bloc
+            num_block = fs.inodes[inode].blocks[i];
+            if (sizeof(Filesystem) + num_block*BLOCK_SIZE <= lecteur && lecteur < sizeof(Filesystem) + (num_block+1)*BLOCK_SIZE){
+                block_index = i;
+            }
+            i++;
+        }
+
+        // Verifier si la tete de lecture est dans le bloc
+        if(block_index == -1){
+            printf("Erreur : la tête de lecture n'est pas dans le fichier.\n");
+        } else {
+            // On copie chaque caractere du file system dans le buffer
+            int j = 0;
+            while (j<size && lecteur <= sizeof(Filesystem) + (num_block+1)*BLOCK_SIZE){
+                fseek(fs.file, lecteur, SEEK_SET);
+                fread(texte+j, sizeof(char),1,fs.file);
+                j++;
+                lecteur++;
+            }
+
+
+            // On réitère le processus jusqu'à la fin de la taille du mot a lire
+            int stop = 0;
+            while (j<size && !stop){
+                block_index++;
+                num_block = fs.inodes[inode].blocks[block_index];
+
+                // Vérifier si on est toujours dans le fichier
+                if(num_block == -1){
+                    stop = 1;
+                    printf("Erreur : Fin du fichier dépassé par la tête de lecture\n");
+                } else {
+                    // On se positionne au bon endroit
+                    lecteur = sizeof(Filesystem) + num_block*BLOCK_SIZE;
+                    while(j<size && lecteur <= sizeof(Filesystem) + (num_block+1)*BLOCK_SIZE){
+                        fseek(fs.file, lecteur, SEEK_SET);
+                        fread(texte+j,sizeof(char),1,fs.file);
+                        j++;
+                        lecteur++;
+                    }
+                }
+            }
+        }
+        fs.opened_file[desc].tete_lecture = lecteur;
+        printf("fin lecteur : %d \n", lecteur);
+    }
+    
+
+
+}
+
+// Fonction pour fermer un fichier / Supprime un descripteur de fichier
+void close_file(int desc){
+    // Vérifier si le descripteur est valide
+    if (desc > MAX_FILE_OPEN || desc < 0 || fs.opened_file[desc].inode == -1){
+        printf("Erreur : descrpiteur invalide\n");
+    } else {
+        fs.opened_file[desc].inode = -1;
+        fs.opened_file[desc].tete_lecture = -1;
+    }
+}
+
+// Fonction pour déplacer la tête de lecture
+void seek_file(int desc, int offset, int whence){
+    // Vérifier si le descripteur est valide
+    if (desc > MAX_FILE_OPEN || desc < 0 || fs.opened_file[desc].inode == -1){
+        printf("Erreur : descrpiteur invalide\n");
+    // offset doit etre > 0
+    } else if (offset < 0) {
+        printf("Erreur : offset < 0\n");
+    } else {
+        // Le cas ou on se poistionne par rapport au debut
+        if (whence == 0){
+            // On place le lecteur au debut du fichier
+            int inode = fs.opened_file[desc].inode;
+            fs.opened_file[desc].tete_lecture = sizeof(Filesystem) + fs.inodes[inode].blocks[0]*BLOCK_SIZE;
+            int lecteur = fs.opened_file[desc].tete_lecture;
+            printf("début lecteur : %d \n", lecteur);
+
+            // On avance de bloc tant qu'on arrive pas a l'endroit souhaité
+            int block_index = 0;
+            int j = 0;
+            int stop = 0;
+            while (j<offset && !stop){
+                // On se positionne au bloc suivant
+                int num_block = fs.inodes[inode].blocks[block_index];
+                if(num_block == -1){
+                    stop = 1;
+                    printf("Erreur : tete de lecture en dehors du fichier\n");
+                } else {
+                    // On avance tant qu'on arrive pas a l'endroit souhaité
+                    lecteur = sizeof(Filesystem) + num_block*BLOCK_SIZE;
+                    while(j<offset && lecteur <= sizeof(Filesystem) + (num_block+1)*BLOCK_SIZE){ 
+                        j++;
+                        lecteur++;
+                    }
+                }
+                block_index++;
+            }
+            // On met a jour la tete de lecture
+            fs.opened_file[desc].tete_lecture = lecteur;
+            printf("fin lecteur : %d \n", lecteur);
+        
+
+        } else {
+            // Cas où on se positionne par rapport a l'endroit courant
+            if (whence == 1){
+                int lecteur = fs.opened_file[desc].tete_lecture;
+                int inode = fs.opened_file[desc].inode;
+                int block_index = -1;
+                int i = 0;
+                printf("début lecteur : %d \n", lecteur);
+
+                // On cherche l'indice du bloc du fichier et le numéro du bloc dans le file system
+                int num_block;
+                while (block_index == -1 && i<NUM_BLOCKS){
+                    num_block = fs.inodes[inode].blocks[i];
+                    if (sizeof(Filesystem) + num_block*BLOCK_SIZE <= lecteur && lecteur < sizeof(Filesystem) + (num_block+1)*BLOCK_SIZE){
+                        block_index = i;
+                    }
+                    i++;
+                }
+
+                // On avance de offset par rapport a la position couante
+                int j = 0;
+                int stop = 0;
+                while (j<offset && !stop){
+                    num_block = fs.inodes[inode].blocks[block_index];
+                    // On vérifier si on est dans le fichier
+                    if(num_block == -1){
+                        stop = 1;
+                        printf("Erreur : tete de lecture en dehors du fichier\n");
+                    } else {
+                        // On positionne la tete de lecture et on avance
+                        lecteur = sizeof(Filesystem) + num_block*BLOCK_SIZE;
+                        while(j<offset && lecteur <= sizeof(Filesystem) + (num_block+1)*BLOCK_SIZE){ 
+                            j++;
+                            lecteur++;
+                        }
+                    }
+                    block_index++;
+                }
+                // On met a jour la tete de lecture
+                fs.opened_file[desc].tete_lecture = lecteur;
+                printf("fin lecteur : %d \n", lecteur);
+            } else {
+                if (whence == 2){
+                    printf("Fonctionnalité disponible prochainement.\n");
+                } else {
+                    printf("Erreur : option non reconnu \n");
+                }
+            }
+        }
+    }
+}
+
+
+// Fonction pour copier un fichier
+int copy_file(char *filename, char *newname, int inode_dir_source, int inode_dir_target) {
+    Directory *dir_source = &fs.directories[inode_dir_source];
+    Directory *dir_target = &fs.directories[inode_dir_target];
+
+    // Vérifier si le fichier existe
+    int source_inode_index = rechInode(filename, *dir_source);
+    if(source_inode_index == -1){
+        printf("Erreur : Fichier inexistant.\n");
+        return -1;
+    }
+
+    // Vérifier si un fichier du même nom existe dans le répertoire source
+    int exist_target_inode = rechInode(newname, *dir_target);
+    if(exist_target_inode != -1){
+        printf("Erreur : Un fichier de ce nom existe déjà dans le répertoire.\n");
+        return -1;
+    }
+
+    // Créer un fichier copie
+    int new_inode_index = create_file(newname, fs.inodes[source_inode_index].permissions, inode_dir_target);
+
+    // Vérifier si le fichier a été créé
+    if (new_inode_index == -1) {
+        return -1;
+    }
+    Inode *source_inode = &fs.inodes[source_inode_index];
+    Inode *new_inode = &fs.inodes[new_inode_index];
+
+    
+    // Mettre a jour la taille du nouveau fichier
+    new_inode->size = source_inode->size;
+
+    
+
+    // Copier les blocs
+    /*
+    for (int i = 0; i < NUM_BLOCKS && source_inode->blocks[i] != -1; i++) {
+        int new_block = allocate_block();
+        if (new_block == -1) {
+            printf("Erreur: Pas assez de blocs pour la copie.\n");
+            delete_file(newname, inode_dir_target);
+            return -1;
+        }
+        new_inode->blocks[i] = new_block;
+
+        
+
+        // Copier les données (exemple avec fread/fwrite si fichiers physiques)
+        
+        fseek(fs.file, source_inode->blocks[i] * BLOCK_SIZE, SEEK_SET);
+        char buffer[BLOCK_SIZE];
+        fread(buffer, 1, BLOCK_SIZE, fs.file);
+
+
+        fseek(fs.file, new_block * BLOCK_SIZE, SEEK_SET);
+        fwrite(buffer, 1, BLOCK_SIZE, fs.file);
+        
+    }
+    */
+
+    char content[new_inode->size];
+    int fd1 = open_file(newname, inode_dir_target);
+    int fd2 = open_file(filename, inode_dir_source);
+    read_file(fd2, content, new_inode->size);
+    write_file(fd1, content, new_inode->size);
+    close_file(fd1);
+    close_file(fd2);
+
+    printf("Fichier copié avec succès.\n");
+    return new_inode_index;
+}
+
+
+
+/**
+ * Copie récursivement un répertoire (et son contenu) d'un répertoire parent source vers un répertoire parent destination.
+ *
+ * @param srcDirName   Le nom du répertoire à copier.
+ * @param srcParentDir L'inode du répertoire parent source (celui qui contient srcDirName).
+ * @param dstParentDir L'inode du répertoire parent de destination (là où on veut copier).
+ * @return L'inode du nouveau répertoire copié, ou -1 en cas d'erreur.
+ */
+ int copy_directory(const char *srcDirName, const char *newname, int srcParentDir, int dstParentDir) {
+    // 1) Trouver l'inode du répertoire source
+    int srcDirInode = rechInode(srcDirName, fs.directories[srcParentDir]);
+    if (srcDirInode == -1) {
+        printf("Erreur : Le répertoire '%s' n'existe pas dans le répertoire %d.\n", srcDirName, srcParentDir);
+        return -1;
+    }
+
+    // 2) Vérifier que c'est bien un répertoire
+    if (fs.inodes[srcDirInode].type != 0) {  // 0 = répertoire
+        printf("Erreur : '%s' n'est pas un répertoire.\n", srcDirName);
+        return -1;
+    }
+
+    // 3) Vérifier si un répertoire (ou fichier) du même nom existe déjà dans la destination
+    int alreadyInode = rechInode(newname, fs.directories[dstParentDir]);
+    if (alreadyInode != -1) {
+        printf("Erreur : Le nom '%s' existe déjà dans le répertoire de destination.\n", newname);
+        return -1;
+    }
+
+    // 4) Créer un nouveau répertoire dans le répertoire parent de destination
+    int newDirInode = create_directory(newname, dstParentDir);
+    if (newDirInode == -1) {
+        printf("Erreur : Échec de la création du répertoire '%s' dans le répertoire %d.\n", newname, dstParentDir);
+        return -1;
+    }
+
+    // 5) Parcourir le contenu du répertoire source et copier chaque entrée
+    Directory *srcDir = &fs.directories[srcDirInode];
+    for (int i = 0; i < NUM_DIRECTORY_ENTRIES; i++) {
+        int childInode = srcDir->entries[i].inode_index;
+        if (childInode != -1) {
+            // Récupération des informations de l'enfant
+            const char *childName = srcDir->entries[i].filename;
+            int childType = fs.inodes[childInode].type;
+
+            if (childType == 1) {
+                // 1 = fichier
+                // On copie le fichier dans le nouveau répertoire
+                copy_file((char *)childName, (char *)childName, srcDirInode, newDirInode);
+
+            } else if (childType == 0) {
+                // 0 = répertoire
+                // Copie récursive du sous-répertoire
+                
+                copy_directory(childName, childName, srcDirInode, newDirInode);
+            } 
+            // NOTE : Si type == 2 => lien symbolique (à gérer ou ignorer selon ton besoin)
+        }
+    }
+
+    printf("Répertoire '%s' (inode %d) copié dans le répertoire %d (nouveau inode %d).\n",
+           srcDirName, srcDirInode, dstParentDir, newDirInode);
+
+    return newDirInode;
+}
+
+
+// Fonction pour gérer un lien dur
+int create_hard_link(const char *link_name, char *filename, int inode_dir_source, int inode_dir_target) {
+    // Répertoire source et cible
+    Directory *dir_source = &fs.directories[inode_dir_source];
+    Directory *dir_target = &fs.directories[inode_dir_target];
+    int inode_index = rechInode(filename, *dir_source);
+
+    // Vérifier si le fichier existe
+    if(inode_index == -1){
+        printf("Erreur: Fichier inexistant.\n");
+        return -1;
+    }
+
+    // Vérifier au cas où un fichier du nom du lien existe dans la cible
+    int exist_target_inode = rechInode(link_name, *dir_target);
+    if(exist_target_inode != -1){
+        printf("Erreur : Un fichier de ce nom existe déjà dans le répertoire.\n");
+        return -1;
+    }
+
+    // Chercher une entrée libre dans le répertoire
+    int index = rechEntree(inode_dir_target);
+    if (index == -1){
+        printf("Erreur: Pas d'espace libre dans le répertoire.\n");
+        return -1;
+    }
+
+    // Ajouter le lien dans le répertoire cible
+    strncpy(dir_target->entries[index].filename, link_name, MAX_FILE_NAME);
+    dir_target->entries[index].inode_index = inode_index;
+    fs.inodes[inode_index].link_count++;  // Incrémenter le nombre de liens
+    printf("Lien dur '%s' créé pour le fichier '%d'.\n", link_name, inode_index);
+    return 0;
+    
+}
+
+// Fonction pour déplacer un fichier (simule un changement de répertoire)
+void move_file(char *filename, int inode_dir_source, int inode_dir_target) {
+    Directory *dir_source = &fs.directories[inode_dir_source];
+    Directory *dir_target = &fs.directories[inode_dir_target];
+
+    // Vérifier si le fichier existe
+    int inode_index = rechInode(filename, *dir_source);
+    if(inode_index == -1){
+        printf("Erreur: Fichier inexistant.\n");
+    } else {
+
+        // Vérifier si aucun fichier du même nom existe dans le répertoire cible
+        int exist_target_inode = rechInode(filename, *dir_target);
+        if(exist_target_inode != -1){
+            printf("Erreur : Un fichier de ce nom existe déjà dans le répertoire.\n");
+        } else {
+
+            Inode *inode = &fs.inodes[inode_index];
+            
+            // Chercher une entrée libre dans le répertoire
+            int index = rechEntree(inode_dir_target);
+            if (index == -1){
+                printf("Erreur: Pas d'espace libre dans le répertoire cible.\n");
+            } else {
+
+                
+
+                // Ajouter le fichier au répertoire cible
+                strncpy(dir_target->entries[index].filename, filename, MAX_FILE_NAME);
+                dir_target->entries[index].inode_index = inode_index;
+
+                
+
+                // Supprimer l'entrée du répertoire
+                int i = 0;
+                int stop = 0;
+                while (!stop) {
+                    if (dir_source->entries[i].inode_index == inode_index && strcmp(filename, dir_source->entries[i].filename) == 0) {
+                        dir_source->entries[i].inode_index = -1;
+                        memset(dir_source->entries[i].filename, 0, MAX_FILE_NAME);
+                        stop = 1;
+                    }
+                    i++;
+                }
+                
+                inode->modification_time = time(NULL);  // Mettre à jour le temps de modification
+
+                printf("Fichier déplacé de répertoire %d à répertoire %d.\n", inode_dir_source, inode_dir_target);
+            }
+        }
+    }
+}
+
+
+
+
+
+
+/**
+ * Vérifie si un inode donné possède une permission spécifique.
+ *
+ * @param inode_index L'index de l'inode à vérifier.
+ * @param perm Le caractère de permission ('r' pour read, 'w' pour write, 'x' pour execute).
+ * @return 1 si l'inode possède la permission, 0 sinon.
+ */
+int has_permission(int inode_index, char perm) {
+    // Vérification que l'inode est valide
+    if (inode_index < 0 || inode_index >= NUM_INODES) {
+        return 0;
+    }
+
+    Inode *inode = &fs.inodes[inode_index];
+
+    // Vérification de la présence du caractère de permission dans la chaîne de permissions
+    if (perm == 'r' && strchr(inode->permissions, 'r')) return 1;
+    if (perm == 'w' && strchr(inode->permissions, 'w')) return 1;
+    if (perm == 'x' && strchr(inode->permissions, 'x')) return 1;
+
+    return 0;  // Permission refusée
+}
+
+/**
+ * Sauvegarde l'état du système de fichiers dans un fichier binaire.
+ *
+ * @param filename Nom du fichier où stocker les données du système de fichiers.
+ */
+void save_filesystem(const char *filename) {
+    FILE *file = fopen(filename, "rb+");  // Ouverture en mode binaire écriture
+    if (!file) {
+        perror("Erreur lors de la sauvegarde du système de fichiers");
+        return;
+    }
+
+    char buffer[NUM_BLOCKS*BLOCK_SIZE];
+
+    //fseek(fs.file, sizeof(Filesystem), SEEK_SET);
+    //fread(buffer, NUM_BLOCKS*BLOCK_SIZE, 1, fs.file);
+    fwrite(&fs, sizeof(Filesystem), 1, file);  // Écriture de toute la structure
+    //fwrite(buffer, NUM_BLOCKS*BLOCK_SIZE, 1, file);
+    fclose(file);
+    printf("Système de fichiers sauvegardé avec succès.\n");
+}
+
+/**
+ * Charge l'état du système de fichiers depuis un fichier binaire.
+ *
+ * @param filename Nom du fichier contenant la sauvegarde.
+ */
+void load_filesystem(const char *filename) {
+    FILE *file = fopen(filename, "rb");  // Ouverture en mode lecture binaire
+    if (!file) {
+        printf("Aucune sauvegarde trouvée. Initialisation d'un nouveau système.\n");
+        init_filesystem(filename);
+        return;
+    } else {
+        fs.file = fopen(filename, "rb+");
+    }
+    
+    fread(&fs, sizeof(Filesystem), 1, file);  // Lecture des données enregistrées
+    fclose(file);
+    printf("Système de fichiers chargé avec succès.\n");
+}
+
+/**
+ * Verrouille le système de fichiers pour éviter les accès concurrents.
+ */
+void lock_filesystem() {
+    int fd = fileno(fs.file);  // Obtenir le descripteur de fichier
+    flock(fd, LOCK_EX);  // Appliquer un verrou exclusif
+}
+
+/**
+ * Déverrouille le système de fichiers.
+ */
+void unlock_filesystem() {
+    int fd = fileno(fs.file);
+    flock(fd, LOCK_UN);  // Libérer le verrou
+}
+
+//verification de la partition filesystem.img
+void display_filesystem(int current_dir) {
+    Directory dir = fs.directories[current_dir];
+
+    printf("\n===== État du système de fichiers =====\n");
+
+    // Affichage des inodes
+    printf("Inodes utilisés :\n");
+    for (int i = 0; i < NUM_INODES; i++) {
+        if (fs.inodes[i].size >= 0) { // Seuls les inodes utilisés sont affichés
+            printf("Inode %d: Taille=%d octets, Liens=%d, Permissions=%s\n",
+                   fs.inodes[i].id, fs.inodes[i].size, fs.inodes[i].link_count, fs.inodes[i].permissions);
+        }
+    }
+
+    // Affichage des fichiers dans le répertoire courant
+    printf("\nRépertoire courant :\n");
+    for (int i = 0; i < NUM_DIRECTORY_ENTRIES; i++) {
+        if (dir.entries[i].inode_index != -1) {
+            printf("- %s (inode %d) (type %d)\n", dir.entries[i].filename, dir.entries[i].inode_index, fs.inodes[dir.entries[i].inode_index].type);
+        }
+    }
+
+    /*
+    // Affichage des blocs libres
+    printf("\nBlocs libres : ");
+    for (int i = 0; i < NUM_BLOCKS; i++) {
+        if (fs.free_blocks[i] == 1) {
+            printf("%d ", i);
+        }
+    }
+    */
+    printf("\n=======================================\n");
+}
+
+
+// Fonction pour changer le répertoire courant
+int changerRep(char *path, int inode_dir){
+
+    int inode = get_inode_from_path(path, inode_dir);
+
+    // Vérifier si le chemin est valide
+    if (inode == -1){
+        return inode_dir;
+    }
+
+    // Vérifier si on a bien un répertoire
+    if (fs.inodes[inode].type != 0){
+        printf("Erreur : le fichier cible du chemin n'est pas un répertoire.\n");
+        return inode_dir;
+    }
+
+    return inode;
+}
+
+
+
+void print_help() {
+    printf("Mini Gestionnaire de Fichiers\n");
+    printf("Usage: ./filesystem [OPTIONS]\n\n");
+    printf("Options:\n");
+    printf("  --help           Affiche ce message d'aide\n");
+    printf("  --init           Force une nouvelle initialisation du système de fichiers\n\n");
+    printf("Commandes disponibles en mode interactif:\n");
+    printf("  ls               Lister les fichiers du répertoire courant\n");
+    printf("  cd <path>         Changer de répertoire\n");
+    printf("  mkdir <dir>      Créer un répertoire\n");
+    printf("  touch <file>     Créer un fichier\n");
+    printf("  rm <file>        Supprimer un fichier\n");
+    printf("  remdir <dir>      Supprimer un répertoire récursivement\n");
+    printf("  cp <src> <newname> <dest_path>  Copier un fichier\n");
+    printf("  mv <src> <dest_path>  Déplacer un fichier\n");
+    printf("  ln <filename> <linkname> <target_path>  Créer un lien dur\n");
+    printf("  sym <path> <linkname>  Créer un lien symbolique\n");
+    printf("  stat <file>      Afficher les infos d'un fichier\n");
+    printf("  open <file>      Ouvre un fichier\n");
+    printf("  close <desc>     Ferme un fichier\n");
+    printf("  wfile <desc> <texte> <size> Ecrit dans un fichier\n");
+    printf("  rfile <desc> <size>      Lit size octet dans un fichier\n");
+    printf("  sfile <desc> <offset> <whence>  Deplace la tete de lecture\n");
+    printf("  list_desc        Affiche les descripteur ouvert\n");
+    printf("  pwd              Afficher le répertoire courant\n");
+    printf("  exit             Quitter le programme\n");
+}
+
+void print_prompt(int current_dir) {
+    // Augmenter la taille du buffer pour le chemin
+    char path[2048] = "";  // Augmenté de 1024 à 2048
+    int dir = current_dir;
+    
+    printf("fs:/");
+
+    while (dir != 0 && dir != -1) {
+        char dirname[MAX_FILE_NAME] = "?";
+        int parent = fs.inodes[dir].inode_rep_parent;
+        
+        // Vérifier que le parent est valide avant d'y accéder
+        if (parent < 0 || parent >= NUM_DIRECTORY_ENTRIES) {
+            break;
+        }
+
+        Directory *parent_dir = &fs.directories[parent];
+
+        for (int i = 0; i < NUM_DIRECTORY_ENTRIES; i++) {
+            if (parent_dir->entries[i].inode_index == dir) {
+                strncpy(dirname, parent_dir->entries[i].filename, MAX_FILE_NAME - 1);
+                dirname[MAX_FILE_NAME - 1] = '\0'; // Assurer la terminaison
+                break;
+            }
+        }
+
+        // Vérifier si nous avons assez d'espace avant de concaténer
+        if (strlen(dirname) + strlen(path) + 2 < sizeof(path)) {  // +2 pour '/' et '\0'
+            char temp[2048] = "/";
+            strncat(temp, dirname, sizeof(temp) - strlen(temp) - 1);
+            strncat(temp, path, sizeof(temp) - strlen(temp) - 1);
+            strncpy(path, temp, sizeof(path) - 1);
+            path[sizeof(path) - 1] = '\0';  // Assurer la terminaison
+        } else {
+            printf("[chemin trop long]");
+            break;
+        }
+
+        dir = parent;
+    }
+    
+    printf("%s> ", path);
+    fflush(stdout);
+}
+// Fonction pour générer le chemin complet
+// Fonction pour générer le chemin complet en toute sécurité
+void generate_full_path(int current_dir, char *path, size_t path_size) {
+    if (!path || path_size == 0) return; // Vérifier les paramètres
+
+    path[0] = '\0';  // Initialiser comme une chaîne vide
+    int dir = current_dir;
+
+    while (dir != 0 && dir != -1) {
+        char dirname[MAX_FILE_NAME] = "?";
+        int parent = fs.inodes[dir].inode_rep_parent;
+
+        // Vérifier que l'index du parent est valide
+        if (parent < 0 || parent >= NUM_DIRECTORY_ENTRIES) break;
+
+        Directory *parent_dir = &fs.directories[parent];
+
+        for (int i = 0; i < NUM_DIRECTORY_ENTRIES; i++) {
+            if (parent_dir->entries[i].inode_index == dir) {
+                strncpy(dirname, parent_dir->entries[i].filename, MAX_FILE_NAME - 1);
+                dirname[MAX_FILE_NAME - 1] = '\0';  // S'assurer de la terminaison
+                break;
+            }
+        }
+
+        // Vérifier si on a assez de place avant de concaténer
+        if (strlen(path) + strlen(dirname) + 2 < path_size) {
+            char temp[2048];
+            snprintf(temp, sizeof(temp), "/%s%s", dirname, path);
+            strncpy(path, temp, path_size - 1);
+            path[path_size - 1] = '\0';  // Assurer la terminaison
+        } else {
+            strncpy(path, "[chemin trop long]", path_size - 1);
+            path[path_size - 1] = '\0';
+            break;
+        }
+
+        dir = parent;
+    }
+}
+
+// Fonction qui liste les descripeurs de fichier
+void print_desc(){
+    for (int i = 0; i < MAX_FILE_OPEN ; i++){
+        if (fs.opened_file[i].inode != -1){
+            printf("Descripteur %d : inode %d\n", i, fs.opened_file[i].inode);
+        }
+    }
+}
+
+
+
+void list_directory(int current_dir) {
+    Directory dir = fs.directories[current_dir];
+    printf("Contenu du répertoire :\n");
+    
+    for (int i = 0; i < NUM_DIRECTORY_ENTRIES; i++) {
+        if (dir.entries[i].inode_index != -1) {
+            Inode *inode = &fs.inodes[dir.entries[i].inode_index];
+            char type = '?';
+            char perm[4] = "---";
+            
+            switch(inode->type) {
+                case 0: type = 'd'; break;  // Répertoire
+                case 1: type = 'f'; break;  // Fichier
+                case 2: type = 'l'; break;  // Lien symbolique
+            }
+            
+            // Afficher les permissions de manière lisible
+            if (inode->permissions[0] == 'r') perm[0] = 'r';
+            if (inode->permissions[1] == 'w') perm[1] = 'w';
+            if (inode->permissions[2] == 'x') perm[2] = 'x';
+            
+            printf("[%c%s] %-20s (inode %d, taille %d octets)\n", 
+                   type, perm, dir.entries[i].filename, 
+                   dir.entries[i].inode_index, inode->size);
+        }
+    }
+}
+
+void print_file_info(const char *filename, int current_dir) {
+    int inode = rechInode(filename, fs.directories[current_dir]);
+    if (inode == -1) {
+        printf("Fichier '%s' introuvable\n", filename);
+        return;
+    }
+    
+    Inode *node = &fs.inodes[inode];
+    printf("Informations sur '%s':\n", filename);
+    printf("  Inode: %d\n", inode);
+    printf("  Type: %s\n", 
+           node->type == 0 ? "Répertoire" : 
+           node->type == 1 ? "Fichier" : 
+           node->type == 2 ? "Lien symbolique" : "Inconnu");
+    printf("  Taille: %d octets\n", node->size);
+    printf("  Permissions: %s\n", node->permissions);
+    printf("  Liens: %d\n", node->link_count);
+    printf("  Créé le: %s", ctime(&node->creation_time));
+    printf("  Modifié le: %s", ctime(&node->modification_time));
+}
+
+int interactive_shell(int force_init) {
+    if (force_init) {
+        printf("Initialisation forcée du système de fichiers...\n");
+        init_filesystem("filesystem.img");
+        
+        // Créer une structure de répertoires de base
+        create_directory("usr", 0);
+        int home_dir = create_directory("home", 0);
+        create_directory("local", rechInode("usr", fs.directories[0]));
+        fs.current_dir = home_dir; // Démarrer dans /home
+    } else {
+        load_filesystem("filesystem.img");
+    }
+
+    
+
+
+    save_filesystem("filesystem.img");
+
+    
+
+    int current_dir = fs.current_dir;
+    char command[256];
+    char arg1[256];
+    char arg2[256];
+    char arg3[256];
+    
+    printf("Mini Gestionnaire de Fichiers. Tapez 'help' pour l'aide.\n");
+    
+    while (1) {
+        print_prompt(current_dir);
+        
+        if (fgets(command, sizeof(command), stdin) != NULL) {
+            // Supprimer le saut de ligne
+            command[strcspn(command, "\n")] = 0;
+            
+            if (strcmp(command, "exit") == 0) {
+                break;
+            } else if (strcmp(command, "help") == 0) {
+                print_help();
+                save_filesystem("filesystem.img");
+            } else if (strcmp(command, "ls") == 0) {
+                list_directory(current_dir);
+                save_filesystem("filesystem.img");
+            } else if (strcmp(command, "pwd") == 0) {
+                char path[2048] = "";
+                generate_full_path(current_dir, path, sizeof(path));
+
+                // Vérifier si le chemin commence par '/' et éviter une double barre
+                printf("/%s\n", path[0] == '/' ? path + 1 : path);
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "cd %s", arg1) == 1) {
+                int new_dir = changerRep(arg1, current_dir);
+                if (new_dir != -1) {
+                    current_dir = new_dir;
+                    fs.current_dir = current_dir;
+                } else {
+                    printf("Erreur: chemin invalide ou ce n'est pas un répertoire\n");
+                }
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "mkdir %s", arg1) == 1) {
+                if (create_directory(arg1, current_dir) == -1) {
+                    printf("Erreur: impossible de créer le répertoire\n");
+                }
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "touch %s", arg1) == 1) {
+                if (create_file(arg1, "rw-", current_dir) == -1) {
+                    printf("Erreur: impossible de créer le fichier\n");
+                }
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "rm %s", arg1) == 1) {
+                delete_file(arg1, current_dir);
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "remdir %s", arg1) == 1) {
+                if (delete_directory(arg1, current_dir) == -1) {
+                    printf("Erreur: impossible de supprimer le répertoire\n");
+                }
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "cp %s %s %s", arg1, arg2, arg3) == 3) {
+                int inode = get_inode_from_path(arg3, current_dir);
+                if (inode == -1 || fs.inodes[inode].type != 0){
+                    printf("Erreur : répertoire cible invalide.\n");
+                } else {
+                    //Directory dir = fs.directories[current_dir];
+                    int inode_src = rechInode(arg1, fs.directories[current_dir]);
+                    if (inode_src == -1){
+                        printf("Erreur : fichier non existant \n");
+                    } else {
+
+                        if (fs.inodes[inode_src].type == 1 || fs.inodes[inode_src].type == 2){
+                            if (copy_file(arg1, arg2, current_dir, inode) == -1) {
+                                printf("Erreur lors de la copie\n");
+                            }
+                        } else if (fs.inodes[inode_src].type == 0) {
+                            if (copy_directory(arg1, arg2, current_dir, inode) == -1){
+                                printf("Erreur lors de la copie\n"); 
+                            }
+                        } else {
+                            printf("Erreur : type de fichier non reconnu\n");
+                        }
+                    }
+                }
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "mv %s %s", arg1, arg2) == 2) {
+                int src_inode = rechInode(arg1, fs.directories[current_dir]);
+                if (src_inode == -1) {
+                    printf("Erreur: fichier source introuvable\n");
+                    continue;
+                }
+                int dest_dir = get_inode_from_path(arg2, current_dir);
+                if (dest_dir != -1 && fs.inodes[dest_dir].type == 0) {
+                    if (fs.inodes[src_inode].type == 0){
+                        move_directory(arg1, current_dir, dest_dir);
+                    } else {
+                        move_file(arg1, current_dir, dest_dir);
+                    }
+                } else {
+                    printf("Erreur : répertoire cible invalide.\n");
+                    /*
+                    move_file(arg1, current_dir, current_dir);
+                    Directory* dir = &fs.directories[current_dir];
+                    for (int i = 0; i < NUM_DIRECTORY_ENTRIES; i++) {
+                        if (dir->entries[i].inode_index == src_inode && 
+                            strcmp(dir->entries[i].filename, arg1) == 0) {
+                            strncpy(dir->entries[i].filename, arg2, MAX_FILE_NAME - 1);
+                            dir->entries[i].filename[MAX_FILE_NAME - 1] = '\0';  // Assurerterminaison
+                            break;
+                        }
+                    }
+                    */
+                }
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "ln %s %s %s", arg1, arg2, arg3) == 3) {
+                int inode = get_inode_from_path(arg3, current_dir);
+                if (inode == -1 || fs.inodes[inode].type != 0){
+                    printf("Erreur : répertoire cible invalide.\n");
+                } else {
+                    if (create_hard_link(arg2, arg1, current_dir, inode) == -1) {
+                        printf("Erreur lors de la création du lien dur\n");
+                    }
+                }
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "sym %s %s", arg1, arg2) == 2) {
+                if (create_symbolic_link(arg2, arg1, current_dir) == -1) {
+                    printf("Erreur lors de la création du lien symbolique\n");
+                }
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "open %s", arg1) == 1){
+                int fd = open_file(arg1, current_dir);
+                if (fd == -1){
+                    printf("Erreur : aucun fichier ouvert\n");
+                } else {
+                    printf("Nouveau descripteur pour le fichier %s : %d\n", arg1, fd);
+                }
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "close %s", arg1) == 1){
+                close_file(atoi(arg1));
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "sfile %s %s %s ", arg1, arg2, arg3) == 3){
+                seek_file(atoi(arg1), atoi(arg2), atoi(arg3));
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "rfile %s %s", arg1, arg2) == 2){
+                char texte[atoi(arg2)+1];
+                read_file(atoi(arg1), texte, atoi(arg2));
+                texte[atoi(arg2)] = '\0';
+                printf("contenu du fichier : %s\n", texte);
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "wfile %s %s %s", arg1, arg2, arg3) == 3){
+                write_file(atoi(arg1), arg2, atoi(arg3));
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "list_desc") == 0){
+                print_desc();
+                save_filesystem("filesystem.img");
+            } else if (sscanf(command, "stat %s", arg1) == 1) {
+                print_file_info(arg1, current_dir);
+                save_filesystem("filesystem.img");
+            } else if (strlen(command) > 0) {
+                printf("Commande inconnue: %s\n", command);
+                save_filesystem("filesystem.img");
+            }
+        }
+    }
+    
+    save_filesystem("filesystem.img");
+    fclose(fs.file);
+    return 0;
+}
+
+
+
+
+
+
+int main(int argc, char *argv[]) {
+    int force_init = 0;
+    int opt;
+    
+    // Analyse des arguments en ligne de commande
+    while ((opt = getopt(argc, argv, "hi")) != -1) {
+        switch (opt) {
+            case 'h':
+                print_help();
+                return 0;
+            case 'i':
+                force_init = 1;
+                break;
+            default:
+                fprintf(stderr, "Usage: %s [-h] [-i]\n", argv[0]);
+                return 1;
+        }
+    }
+    
+    // Démarrer le shell interactif
+    return interactive_shell(force_init);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/**
+
+//Ancienne MAIN ICI
+int main() {
+    // Charger ou créer le système de fichiers
+    load_filesystem("filesystem.img");
+
+    // Indice du répertoire courant
+    int current_dir = fs.current_dir;
+
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+    // Création de quelques fichiers
+    int inode1 = create_file("fichier1.txt", "rw-", current_dir);
+    int inode2 = create_file("fichier2.txt", "r--", current_dir);
+    int inode3 = create_file("fichier3.txt", "rwx", current_dir);
+
+
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+    // Création de liens durs
+    create_hard_link("lien_fichier1", "fichier1.txt", current_dir, current_dir);
+    create_hard_link("lien_fichier2", "fichier2.txt", current_dir, current_dir);
+
+    display_filesystem(current_dir);
+    printf("inode 1 %d : inode 2 : %d \n", inode1, inode2);
+    printf("\n\n\n\n");
+
+    // Copier un fichier
+    int copied_inode = copy_file("fichier1.txt", "copie_fichier1.txt", current_dir, current_dir);
+
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+    
+    // Création d'un répertoire
+    int dir_inode = create_directory("mario_eli_meriem", current_dir);
+    int dir_inode2 = create_directory("repertoire2", current_dir);
+    int dir_inode3 = create_directory("repertoire3", current_dir);
+
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+    
+    // Déplacer un fichier
+    int dir_test = get_inode_from_path("./mario_eli_meriem", current_dir);
+    if(dir_test != -1){
+        move_file("fichier1.txt", current_dir, dir_test);
+    }
+
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+    // Supprimer des fichiers
+    delete_file("fichier2.txt", current_dir);
+
+
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+    // Test de copie de repertoire
+    copy_directory("mario_eli_meriem", current_dir, dir_inode2);
+
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+    //Test de deplacement de repertoire
+    move_directory("repertoire3", current_dir, dir_inode2);
+
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+    // Changer de répertoire
+    current_dir = changerRep("mario_eli_meriem", current_dir);
+
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+    // Supprimer un fichier
+    delete_file("fichier1.txt", current_dir);
+    create_file("fichiertest.txt", "rw-", current_dir);
+
+    // Afficher l'état du système de fichiers
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+    // Revenir au répertoire parent.
+    current_dir = changerRep("..", current_dir);
+
+
+    // Afficher l'état du système de fichiers
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+    //Test de suppression
+    delete_directory("mario_eli_meriem", current_dir);
+
+    // Afficher l'état du système de fichiers
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+    // Changer de repertoire
+    current_dir = changerRep("repertoire2", current_dir);
+
+    // Afficher l'état du système de fichiers
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+    // Changer de repertoire
+    current_dir = changerRep("mario_eli_meriem", current_dir);
+
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+    int fd = open_file("fichier1.txt", current_dir);
+
+    char buffer[20];
+    // strncpy(buffer, 'abcdefgh', 8);
+    int new_size = write_file(fd, "abcdefgh", 8);
+
+    int ind = rechInode("fichier1.txt", fs.directories[current_dir]);
+
+    printf("new size : %d \n", fs.inodes[ind].size);
+    
+
+    //fread(buffer, BLOCK_SIZE, 1, fs.file);
+
+    char texte_lu[8];
+
+    
+
+    read_file(fd, texte_lu, 8);
+
+    printf ("test : %s \n", texte_lu);
+
+    close_file(fd);
+
+
+    fd = open_file("fichier1.txt", current_dir);
+
+    seek_file(fd, 3, 0);
+
+    read_file(fd, texte_lu, 4);
+
+    printf ("test : %s \n", texte_lu);
+
+    seek_file(fd, 3, 0);
+
+    seek_file(fd,5,0);
+
+    read_file(fd, texte_lu, 2);
+
+    printf ("test : %s \n", texte_lu);
+
+    close_file(fd);
+
+    fd = open_file("fichier1.txt", current_dir);
+
+    new_size = write_file(fd, "test", 4);
+
+    ind = rechInode("fichier1.txt", fs.directories[current_dir]);
+
+    printf("new size : %d \n", fs.inodes[ind].size);
+
+    printf("maj_size : %d \n", new_size);
+    read_file(fd, texte_lu, 8);
+
+    printf ("test : %s \n", texte_lu);
+
+    close_file(fd);
+
+
+    current_dir = changerRep("../../", current_dir);
+
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+
+    create_symbolic_link("lien_fic1", "repertoire2/mario_eli_meriem/fichier1.txt", current_dir);
+
+    display_filesystem(current_dir);
+    printf("\n\n\n\n");
+
+    fd = open_file("lien_fic1", current_dir);
+
+
+    char chemin_lien[strlen("repertoire2/mario_eli_meriem/fichier1.txt")];
+
+    printf("longueur : ");
+    printf("%d\n", strlen(chemin_lien));
+
+    //printf("longueur : %d \n", strlen("repertoire2/mario_eli_meriem/fichier1.txt"));
+
+    read_file(fd, chemin_lien, strlen("repertoire2/mario_eli_meriem/fichier1.txt"));
+
+    
+
+    printf("longueur : ");
+    printf("%d\n", strlen(chemin_lien));
+    printf("chemin : %s \n", chemin_lien);
+    
+
+
+    // Sauvegarder l'état du système de fichiers
+    fs.current_dir = current_dir;
+    save_filesystem("filesystem.img");
+
+    return 0;
+}
+
+*/
