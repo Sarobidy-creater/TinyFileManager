@@ -54,7 +54,11 @@ typedef struct filesystem {
 
 Filesystem fs;  // Instance globale du système de fichiers
 
-// Fonction pour initialiser le système de fichiers
+/**
+ * @brief Initialise le système de fichiers à partir d'un fichier simulé.
+ *
+ * @param filename Le nom du fichier représentant la partition simulée.
+ */
 void init_filesystem(const char *filename) {
     fs.file = fopen(filename, "wb+");  // Ouverture en mode binaire
     if (!fs.file) {
@@ -118,11 +122,15 @@ void init_filesystem(const char *filename) {
 
     printf("fs size : %d\n", sizeof(Filesystem));
 
-    //fclose(fs.file);
-    //fs.file = fopen(filename, "rb+");
+    fclose(fs.file);
+    fs.file = fopen(filename, "rb+");
 }
 
-// Fonction pour allouer un bloc de données libre
+/**
+ * @brief Alloue un bloc libre dans le système de fichiers.
+ *
+ * @return L'index du bloc alloué ou -1 si aucun bloc n'est disponible.
+ */
 int allocate_block() {
     for (int i = 0; i < NUM_BLOCKS; i++) {
         if (fs.free_blocks[i] == 0) {
@@ -133,7 +141,11 @@ int allocate_block() {
     return -1;  // Aucun bloc libre trouvé
 }
 
-// Fonction pour libérer un bloc
+/**
+ * @brief Libère un bloc précédemment alloué.
+ *
+ * @param block_index L'index du bloc à libérer.
+ */
 void free_block(int block_index) {
     if (block_index >= 0 && block_index < NUM_BLOCKS) {
         fs.free_blocks[block_index] = 0;  // Marquer le bloc comme libre
@@ -144,7 +156,13 @@ void free_block(int block_index) {
 
 
 
-// Fonction pour rechercher un inode a partir du nom de fichier
+/**
+ * @brief Recherche l'inode correspondant à un nom de fichier dans un répertoire donné.
+ *
+ * @param filename Le nom du fichier recherché.
+ * @param dir Le répertoire dans lequel effectuer la recherche.
+ * @return L'index de l'inode correspondant, ou -1 si introuvable.
+ */
 int rechInode(const char *filename, Directory dir){
     int inode = -1;
     int i = 0;
@@ -159,7 +177,12 @@ int rechInode(const char *filename, Directory dir){
     return inode;
 }
 
-// Fonction pour rechercher un espace libre dans un répertoire²
+/**
+ * @brief Recherche une entrée libre dans un répertoire donné.
+ *
+ * @param dir_inode L'index de l'inode du répertoire à examiner.
+ * @return L'index de l'entrée libre trouvée, ou -1 si aucune n'est disponible.
+ */
 int rechEntree(int dir_inode){
     int index = -1;
     int i = 0;
@@ -175,9 +198,77 @@ int rechEntree(int dir_inode){
     return index;
 }
 
+/**
+ * Vérifie si un inode donné possède une permission spécifique.
+ *
+ * @param inode_index L'index de l'inode à vérifier.
+ * @param perm Le caractère de permission ('r' pour read, 'w' pour write, 'x' pour execute).
+ * @return 1 si l'inode possède la permission, 0 sinon.
+ */
+ int has_permission(int inode_index, char perm) {
+    // Vérification que l'inode est valide
+    if (inode_index < 0 || inode_index >= NUM_INODES) {
+        return 0;
+    }
 
-// Fonction pour créer un fichier dans un répertoire
+    Inode *inode = &fs.inodes[inode_index];
+
+    // Vérification de la présence du caractère de permission dans la chaîne de permissions
+    if (perm == 'r' && strchr(inode->permissions, 'r')) return 1;
+    if (perm == 'w' && strchr(inode->permissions, 'w')) return 1;
+    if (perm == 'x' && strchr(inode->permissions, 'x')) return 1;
+
+    return 0;  // Permission refusée
+}
+
+/**
+ * @brief Modifie les permissions (r, w, x) d'un fichier ou répertoire.
+ * @param filename Le nom du fichier/répertoire.
+ * @param newPerms Chaîne de 3 caractères (ex.: "rw-", "r-x", etc.).
+ * @param dir_inode L'inode du répertoire courant ou parent.
+ * @return 0 si succès, -1 si erreur.
+ */
+ int change_permissions(const char *filename, const char *newPerms, int dir_inode) {
+    // 1) Retrouver l'inode du fichier/répertoire
+    int inode_index = rechInode(filename, fs.directories[dir_inode]);
+    if (inode_index == -1) {
+        printf("Erreur : '%s' introuvable dans ce répertoire.\n", filename);
+        return -1;
+    }
+
+    // 2) Mettre à jour les permissions (3 caractères max)
+    Inode *node = &fs.inodes[inode_index];
+    strncpy(node->permissions, newPerms, 3);
+    node->modification_time = time(NULL);
+
+    printf("Permissions de '%s' modifiées en '%s'.\n", filename, newPerms);
+    return 0;
+}
+
+
+
+/**
+ * @brief Crée un nouveau fichier dans un répertoire spécifié.
+ *
+ * Cette fonction vérifie les permissions d'écriture du répertoire parent avant de créer un nouveau fichier.
+ * Elle vérifie également qu'aucun fichier portant le même nom n'existe déjà dans le répertoire. Ensuite,
+ * elle alloue un inode et un bloc de données pour le nouveau fichier, initialise ses métadonnées et ajoute
+ * une entrée dans le répertoire parent.
+ *
+ * @param filename Nom du fichier à créer.
+ * @param permissions Chaîne de caractères représentant les permissions initiales du fichier (ex : "rw-", "rwx").
+ * @param dir_inode Index de l'inode du répertoire parent où le fichier doit être créé.
+ *
+ * @return L'index de l'inode du fichier créé en cas de succès, ou -1 en cas d'erreur (permissions insuffisantes,
+ *         absence d'espace ou d'inode disponible, fichier déjà existant, etc.).
+ */
 int create_file(const char *filename, const char *permissions, int dir_inode) {
+    // Vérifier permission 'w' sur le répertoire parent
+    if (!has_permission(dir_inode, 'w')) {
+        printf("Erreur : permission insuffisante pour créer un fichier dans ce répertoire.\n");
+        return -1;
+    }
+
     // Répertoire où on va créer le fichier
     Directory *dir = &fs.directories[dir_inode];
     int inode_index = -1;
@@ -240,7 +331,19 @@ int create_file(const char *filename, const char *permissions, int dir_inode) {
     return inode_index;
 }
 
-// Fonction pour supprimer un fichier (non répertoire)
+/**
+ * @brief Supprime un fichier spécifié d'un répertoire.
+ *
+ * Cette fonction vérifie l'existence du fichier indiqué dans le répertoire spécifié par son inode. 
+ * Si le fichier existe, elle libère tous les blocs associés au fichier, réinitialise l'inode correspondant 
+ * pour le rendre disponible et supprime l'entrée correspondante dans le répertoire parent. Elle prend également
+ * en compte les éventuels liens durs vers ce fichier.
+ *
+ * @param filename Nom du fichier à supprimer.
+ * @param dir_inode Index de l'inode du répertoire contenant le fichier à supprimer.
+ *
+ * @note Cette fonction ne peut pas supprimer un répertoire.
+ */
 void delete_file(char *filename, int dir_inode) {
     // Répertoire où le fichier se situe
     Directory *dir = &fs.directories[dir_inode];
@@ -285,7 +388,7 @@ void delete_file(char *filename, int dir_inode) {
 
 
 /**
- * Supprime un répertoire vide du système de fichiers.
+ * @brief Supprime un répertoire vide du système de fichiers.
  *
  * @param dirname    Le nom du répertoire à supprimer.
  * @param parent_dir L'inode du répertoire parent (celui qui contient dirname).
@@ -304,8 +407,13 @@ int delete_directory(const char *dirname, int parent_dir) {
         printf("Erreur: '%s' n'est pas un répertoire.\n", dirname);
         return -1;
     }
+    // 3) Vérifier permission 'w' sur ce répertoire
+    if (!has_permission(dir_inode, 'w')) {
+        printf("Erreur : pas de permission d'écriture sur le répertoire '%s'.\n", dirname);
+        return -1;
+    }
 
-    // Supprimer récursivement
+    // 4) Supprimer récursivement
     Directory *dir_to_delete = &fs.directories[dir_inode];
     for (int i = 0; i < NUM_DIRECTORY_ENTRIES; i++) {
         if (dir_to_delete->entries[i].inode_index != -1) {
@@ -335,7 +443,8 @@ int delete_directory(const char *dirname, int parent_dir) {
             break;
         }
     }
-
+    
+           
     // 5) Libérer l'inode du répertoire
     Inode *inode_ptr = &fs.inodes[dir_inode];
     inode_ptr->size = -1;
@@ -452,14 +561,24 @@ int delete_directory(const char *dirname, int parent_dir) {
         printf("Erreur : '%s' n'est pas un répertoire.\n", srcDirName);
         return -1;
     }
+     // 3) Vérifier la permission 'w' sur le répertoire source (pour supprimer l'entrée)
+     if (!has_permission(srcParentDir, 'w')) {
+        printf("Erreur : permission d'écriture refusée dans le répertoire source (inode %d).\n", srcParentDir);
+        return -1;
+    }
 
-    // 3) Vérifier qu'il n'y a pas déjà un répertoire (ou fichier) du même nom dans la destination
+    // 4) Vérifier qu'il n'y a pas déjà un répertoire (ou fichier) du même nom dans la destination
     if (rechInode(srcDirName, fs.directories[dstParentDir]) != -1) {
         printf("Erreur : Le nom '%s' existe déjà dans le répertoire %d.\n", srcDirName, dstParentDir);
         return -1;
     }
+    // 5) Vérifier la permission 'w' sur le répertoire cible (pour créer l'entrée)
+    if (!has_permission(dstParentDir, 'w')) {
+        printf("Erreur : permission d'écriture refusée dans le répertoire cible (inode %d).\n", dstParentDir);
+        return -1;
+    }
 
-    // 4) Ajouter une entrée dans le répertoire destination
+    // 6) Ajouter une entrée dans le répertoire destination
     int dstIndex = rechEntree(dstParentDir);
     if (dstIndex == -1) {
         printf("Erreur : Pas d'espace libre dans le répertoire %d.\n", dstParentDir);
@@ -469,7 +588,7 @@ int delete_directory(const char *dirname, int parent_dir) {
     strncpy(destDir->entries[dstIndex].filename, srcDirName, MAX_FILE_NAME);
     destDir->entries[dstIndex].inode_index = srcDirInode;
 
-    // 5) Supprimer l'entrée du répertoire source
+    // 7) Supprimer l'entrée du répertoire source
     Directory *sourceDir = &fs.directories[srcParentDir];
     for (int i = 0; i < NUM_DIRECTORY_ENTRIES; i++) {
         if (sourceDir->entries[i].inode_index == srcDirInode &&
@@ -481,7 +600,7 @@ int delete_directory(const char *dirname, int parent_dir) {
         }
     }
 
-    // 6) Mettre à jour l'inode du répertoire pour pointer vers son nouveau parent
+    // 8) Mettre à jour l'inode du répertoire pour pointer vers son nouveau parent
     fs.inodes[srcDirInode].inode_rep_parent = dstParentDir;
     fs.inodes[srcDirInode].modification_time = time(NULL);
 
@@ -640,7 +759,14 @@ int delete_directory(const char *dirname, int parent_dir) {
 }
 
 
-// Fonction pour ouvrir un fichier (renvoie un int = descripteur)
+
+/**
+ * @brief Ouvre un fichier et crée un descripteur de fichier.
+ *
+ * @param filename Nom du fichier à ouvrir.
+ * @param dir_inode L'inode du répertoire où se trouve le fichier.
+ * @return Le descripteur du fichier ouvert ou -1 en cas d'erreur.
+ */
 int open_file (const char *filename, int dir_inode){
     // On cherche le repertoire parent et l'inode
     Directory dir = fs.directories[dir_inode];
@@ -670,7 +796,14 @@ int open_file (const char *filename, int dir_inode){
     return desc;
 }
 
-// Fonction pour ecrire dans un fichier (renvoie la taille du fichier apres ecriture)
+/**
+ * @brief Écrit des données dans un fichier ouvert.
+ *
+ * @param desc Descripteur du fichier ouvert.
+ * @param texte Chaîne à écrire dans le fichier.
+ * @param size Nombre d'octets à écrire.
+ * @return Nombre d'octets écrits ou -1 en cas d'erreur.
+ */
 int write_file(int desc, const char *texte, int size){
     // Vérifier si le descripteur est valide
     if (desc > MAX_FILE_OPEN || desc < 0 || fs.opened_file[desc].inode == -1){
@@ -680,6 +813,19 @@ int write_file(int desc, const char *texte, int size){
         printf("Erreur : taille négatif\n");
         return -1;
     }
+    // Vérifier la permission 'w'
+    int inode_idx = fs.opened_file[desc].inode;
+    if (!has_permission(inode_idx, 'w')) {
+        printf("Erreur : permission d'écriture refusée.\n");
+        return -1;
+    }
+
+    // Vérifier si on ecrit bien dans un fichier
+    if(fs.inodes[fs.opened_file[desc].inode].type != 1){
+        printf("Erreur : tente d'ecrire dans un repertoire ou dans un lien symbolique");
+        return -1;
+    }
+
     
     // tableau pour lire si on a ecrit un nouveau charactere ou non
     char texte_tmp[1];
@@ -719,7 +865,6 @@ int write_file(int desc, const char *texte, int size){
         // On écrit dans le bloc tant que le bloc n'est pas complet
         int j = 0;
         while (j<size && lecteur <= sizeof(Filesystem) + (num_block+1)*BLOCK_SIZE){
-            //printf("\n\ndebug %d\n\n", j);
             // On se positionne pour ecrire
             fseek(fs.file, lecteur, SEEK_SET);
             // On lit pour verifier si il y a des caracteres ecrit (pour mettre a jour la taille)
@@ -772,13 +917,30 @@ int write_file(int desc, const char *texte, int size){
         }
 
     }
+
+    // Mettre a jour récursivement la taille des repertoires parents
+    int id_rep_parent = inode;
+    while (id_rep_parent != 0){
+        //printf("\n inode %d \n\n", id_rep_parent);
+        id_rep_parent = fs.inodes[id_rep_parent].inode_rep_parent;
+        fs.inodes[id_rep_parent].size = fs.inodes[id_rep_parent].size + maj_size;
+    }
+    
+
     fs.opened_file[desc].tete_lecture = lecteur;
     printf("fin lecteur : %d \n", lecteur);
+
     return maj_size;
 
 }
 
-// Fonction pour lire un fichier
+/**
+ * @brief Lit des données à partir d'un fichier ouvert.
+ *
+ * @param desc Descripteur du fichier ouvert.
+ * @param texte Buffer où stocker les données lues.
+ * @param size Nombre d'octets à lire.
+ */
 void read_file(int desc, char *texte, int size){
 
     // Vérifier si le descripteur est valide
@@ -789,10 +951,16 @@ void read_file(int desc, char *texte, int size){
     } else {    
         // allouer la memoire pour ecrire dans le buffer
         // memset(texte, 0, size*sizeof(char));
+        //Vérification permission'r'
+        int inode = fs.opened_file[desc].inode;
+        if (!has_permission(inode, 'r')) {
+            printf("Erreur : permission de lecture refusée pour cet inode.\n");
+            return; // on stoppe la fonction ici
+        }
 
         // tete de lecture et inode du fichier
         int lecteur = fs.opened_file[desc].tete_lecture;
-        int inode = fs.opened_file[desc].inode;
+        //int inode = fs.opened_file[desc].inode;
 
         printf("début lecteur : %d \n", lecteur);
 
@@ -845,6 +1013,7 @@ void read_file(int desc, char *texte, int size){
                 }
             }
         }
+        texte[size] = '\0';
         fs.opened_file[desc].tete_lecture = lecteur;
         printf("fin lecteur : %d \n", lecteur);
     }
@@ -853,7 +1022,11 @@ void read_file(int desc, char *texte, int size){
 
 }
 
-// Fonction pour fermer un fichier / Supprime un descripteur de fichier
+/**
+ * @brief Ferme un fichier ouvert et libère son descripteur.
+ *
+ * @param desc Descripteur du fichier à fermer.
+ */
 void close_file(int desc){
     // Vérifier si le descripteur est valide
     if (desc > MAX_FILE_OPEN || desc < 0 || fs.opened_file[desc].inode == -1){
@@ -864,7 +1037,14 @@ void close_file(int desc){
     }
 }
 
-// Fonction pour déplacer la tête de lecture
+
+/**
+ * @brief Déplace la tête de lecture d'un fichier ouvert.
+ *
+ * @param desc Descripteur du fichier.
+ * @param offset Décalage à appliquer.
+ * @param whence Origine du déplacement : 0=début, 1=fin, 2=position actuelle.
+ */
 void seek_file(int desc, int offset, int whence){
     // Vérifier si le descripteur est valide
     if (desc > MAX_FILE_OPEN || desc < 0 || fs.opened_file[desc].inode == -1){
@@ -908,7 +1088,7 @@ void seek_file(int desc, int offset, int whence){
 
         } else {
             // Cas où on se positionne par rapport a l'endroit courant
-            if (whence == 1){
+            if (whence == 2){
                 int lecteur = fs.opened_file[desc].tete_lecture;
                 int inode = fs.opened_file[desc].inode;
                 int block_index = -1;
@@ -948,8 +1128,40 @@ void seek_file(int desc, int offset, int whence){
                 fs.opened_file[desc].tete_lecture = lecteur;
                 printf("fin lecteur : %d \n", lecteur);
             } else {
-                if (whence == 2){
-                    printf("Fonctionnalité disponible prochainement.\n");
+                // Cas où on se positionne par rapport a la fin
+                if (whence == 1){
+                    // On place le lecteur au debut du fichier
+                    int inode = fs.opened_file[desc].inode;
+                    fs.opened_file[desc].tete_lecture = sizeof(Filesystem) + fs.inodes[inode].blocks[0]*BLOCK_SIZE;
+                    int lecteur = fs.opened_file[desc].tete_lecture;
+                    printf("début lecteur : %d \n", lecteur);
+
+                    // On avance de bloc tant qu'on arrive pas a l'endroit souhaité
+                    int block_index = 0;
+                    int j = 0;
+                    int stop = 0;
+                    int pos = fs.inodes[inode].size - offset;
+                    while (j<pos && !stop){
+                        // On se positionne au bloc suivant
+                        int num_block = fs.inodes[inode].blocks[block_index];
+                        if(num_block == -1){
+                            stop = 1;
+                            printf("Erreur : tete de lecture en dehors du fichier\n");
+                        } else {
+                            // On avance tant qu'on arrive pas a l'endroit souhaité
+                            lecteur = sizeof(Filesystem) + num_block*BLOCK_SIZE;
+                            while(j<pos && lecteur <= sizeof(Filesystem) + (num_block+1)*BLOCK_SIZE){ 
+                                j++;
+                                lecteur++;
+                            }
+                        }
+                        block_index++;
+                    }
+                    // On met a jour la tete de lecture
+                    fs.opened_file[desc].tete_lecture = lecteur;
+                    printf("fin lecteur : %d \n", lecteur);
+
+
                 } else {
                     printf("Erreur : option non reconnu \n");
                 }
@@ -959,7 +1171,16 @@ void seek_file(int desc, int offset, int whence){
 }
 
 
-// Fonction pour copier un fichier
+
+/**
+ * @brief Copie un fichier vers un nouveau fichier dans un répertoire cible.
+ *
+ * @param filename Nom du fichier à copier.
+ * @param newname Nouveau nom du fichier copié.
+ * @param inode_dir_source Inode du répertoire source.
+ * @param inode_dir_target Inode du répertoire cible.
+ * @return L'inode du nouveau fichier ou -1 en cas d'erreur.
+ */
 int copy_file(char *filename, char *newname, int inode_dir_source, int inode_dir_target) {
     Directory *dir_source = &fs.directories[inode_dir_source];
     Directory *dir_target = &fs.directories[inode_dir_target];
@@ -968,6 +1189,16 @@ int copy_file(char *filename, char *newname, int inode_dir_source, int inode_dir
     int source_inode_index = rechInode(filename, *dir_source);
     if(source_inode_index == -1){
         printf("Erreur : Fichier inexistant.\n");
+        return -1;
+    }
+    // ----- (1) Vérifier la permission 'r' sur le fichier source -----
+    if (!has_permission(source_inode_index, 'r')) {
+        printf("Erreur : pas de permission de lecture sur le fichier source '%s'.\n", filename);
+        return -1;
+    }
+    // ----- (2) Vérifier la permission 'w' sur le répertoire de destination -----
+    if (!has_permission(inode_dir_target, 'w')) {
+        printf("Erreur : pas de permission d'écriture dans le répertoire cible.\n");
         return -1;
     }
 
@@ -1055,22 +1286,34 @@ int copy_file(char *filename, char *newname, int inode_dir_source, int inode_dir
         printf("Erreur : '%s' n'est pas un répertoire.\n", srcDirName);
         return -1;
     }
+    // 3) Vérifier la permission 'r' sur le répertoire source
+    if (!has_permission(srcDirInode, 'r')) {
+        printf("Erreur : pas de permission de lecture sur le répertoire source '%s'.\n", srcDirName);
+        return -1;
+    }
 
-    // 3) Vérifier si un répertoire (ou fichier) du même nom existe déjà dans la destination
+
+
+    // 4) Vérifier si un répertoire (ou fichier) du même nom existe déjà dans la destination
     int alreadyInode = rechInode(newname, fs.directories[dstParentDir]);
     if (alreadyInode != -1) {
         printf("Erreur : Le nom '%s' existe déjà dans le répertoire de destination.\n", newname);
         return -1;
     }
+    // 5) Vérifier la permission 'w' sur le répertoire de destination (pour y créer un nouveau dossier)
+    if (!has_permission(dstParentDir, 'w')) {
+        printf("Erreur : pas de permission d'écriture dans le répertoire destination (inode %d).\n", dstParentDir);
+        return -1;
+    }
 
-    // 4) Créer un nouveau répertoire dans le répertoire parent de destination
+    // 6) Créer un nouveau répertoire dans le répertoire parent de destination
     int newDirInode = create_directory(newname, dstParentDir);
     if (newDirInode == -1) {
         printf("Erreur : Échec de la création du répertoire '%s' dans le répertoire %d.\n", newname, dstParentDir);
         return -1;
     }
 
-    // 5) Parcourir le contenu du répertoire source et copier chaque entrée
+    // 7) Parcourir le contenu du répertoire source et copier chaque entrée
     Directory *srcDir = &fs.directories[srcDirInode];
     for (int i = 0; i < NUM_DIRECTORY_ENTRIES; i++) {
         int childInode = srcDir->entries[i].inode_index;
@@ -1101,7 +1344,16 @@ int copy_file(char *filename, char *newname, int inode_dir_source, int inode_dir
 }
 
 
-// Fonction pour gérer un lien dur
+
+/**
+ * @brief Crée un lien dur vers un fichier existant.
+ *
+ * @param link_name Nom du nouveau lien dur.
+ * @param filename Nom du fichier source.
+ * @param inode_dir_source Inode du répertoire contenant le fichier source.
+ * @param inode_dir_target Inode du répertoire cible où sera créé le lien dur.
+ * @return 0 en cas de succès, -1 en cas d'erreur.
+ */
 int create_hard_link(const char *link_name, char *filename, int inode_dir_source, int inode_dir_target) {
     // Répertoire source et cible
     Directory *dir_source = &fs.directories[inode_dir_source];
@@ -1137,7 +1389,14 @@ int create_hard_link(const char *link_name, char *filename, int inode_dir_source
     
 }
 
-// Fonction pour déplacer un fichier (simule un changement de répertoire)
+
+/**
+ * @brief Déplace un fichier d'un répertoire source vers un répertoire cible.
+ *
+ * @param filename Nom du fichier à déplacer.
+ * @param inode_dir_source Inode du répertoire source.
+ * @param inode_dir_target Inode du répertoire cible.
+ */
 void move_file(char *filename, int inode_dir_source, int inode_dir_target) {
     Directory *dir_source = &fs.directories[inode_dir_source];
     Directory *dir_target = &fs.directories[inode_dir_target];
@@ -1147,12 +1406,22 @@ void move_file(char *filename, int inode_dir_source, int inode_dir_target) {
     if(inode_index == -1){
         printf("Erreur: Fichier inexistant.\n");
     } else {
+         // Vérifier la permission 'w' sur le répertoire source (on va enlever l'entrée)
+    if (!has_permission(inode_dir_source, 'w')) {
+        printf("Erreur : pas de permission d'écriture dans le répertoire source (inode %d).\n", inode_dir_source);
+        return;
+    }
 
         // Vérifier si aucun fichier du même nom existe dans le répertoire cible
         int exist_target_inode = rechInode(filename, *dir_target);
         if(exist_target_inode != -1){
             printf("Erreur : Un fichier de ce nom existe déjà dans le répertoire.\n");
         } else {
+            if (!has_permission(inode_dir_target, 'w')) {
+                printf("Erreur : pas de permission d'écriture dans le répertoire cible (inode %d).\n", inode_dir_target);
+                return;
+            }
+        
 
             Inode *inode = &fs.inodes[inode_index];
             
@@ -1195,53 +1464,35 @@ void move_file(char *filename, int inode_dir_source, int inode_dir_target) {
 
 
 
-/**
- * Vérifie si un inode donné possède une permission spécifique.
- *
- * @param inode_index L'index de l'inode à vérifier.
- * @param perm Le caractère de permission ('r' pour read, 'w' pour write, 'x' pour execute).
- * @return 1 si l'inode possède la permission, 0 sinon.
- */
-int has_permission(int inode_index, char perm) {
-    // Vérification que l'inode est valide
-    if (inode_index < 0 || inode_index >= NUM_INODES) {
-        return 0;
-    }
 
-    Inode *inode = &fs.inodes[inode_index];
-
-    // Vérification de la présence du caractère de permission dans la chaîne de permissions
-    if (perm == 'r' && strchr(inode->permissions, 'r')) return 1;
-    if (perm == 'w' && strchr(inode->permissions, 'w')) return 1;
-    if (perm == 'x' && strchr(inode->permissions, 'x')) return 1;
-
-    return 0;  // Permission refusée
-}
 
 /**
- * Sauvegarde l'état du système de fichiers dans un fichier binaire.
+ * @brief Sauvegarde l'état du système de fichiers dans un fichier binaire.
  *
  * @param filename Nom du fichier où stocker les données du système de fichiers.
  */
 void save_filesystem(const char *filename) {
+    
+    fclose(fs.file);
     FILE *file = fopen(filename, "rb+");  // Ouverture en mode binaire écriture
     if (!file) {
         perror("Erreur lors de la sauvegarde du système de fichiers");
         return;
     }
 
-    char buffer[NUM_BLOCKS*BLOCK_SIZE];
+    //char buffer[NUM_BLOCKS*BLOCK_SIZE];
 
     //fseek(fs.file, sizeof(Filesystem), SEEK_SET);
     //fread(buffer, NUM_BLOCKS*BLOCK_SIZE, 1, fs.file);
     fwrite(&fs, sizeof(Filesystem), 1, file);  // Écriture de toute la structure
     //fwrite(buffer, NUM_BLOCKS*BLOCK_SIZE, 1, file);
     fclose(file);
+    fs.file = fopen(filename, "rb+");
     printf("Système de fichiers sauvegardé avec succès.\n");
 }
 
 /**
- * Charge l'état du système de fichiers depuis un fichier binaire.
+ * @brief Charge l'état du système de fichiers depuis un fichier binaire.
  *
  * @param filename Nom du fichier contenant la sauvegarde.
  */
@@ -1250,18 +1501,18 @@ void load_filesystem(const char *filename) {
     if (!file) {
         printf("Aucune sauvegarde trouvée. Initialisation d'un nouveau système.\n");
         init_filesystem(filename);
-        return;
     } else {
+        fread(&fs, sizeof(Filesystem), 1, file);  // Lecture des données enregistrées
+        fclose(file);
+        printf("Système de fichiers chargé avec succès.\n");
         fs.file = fopen(filename, "rb+");
     }
     
-    fread(&fs, sizeof(Filesystem), 1, file);  // Lecture des données enregistrées
-    fclose(file);
-    printf("Système de fichiers chargé avec succès.\n");
+    
 }
 
 /**
- * Verrouille le système de fichiers pour éviter les accès concurrents.
+ * @brief Verrouille le système de fichiers pour éviter les accès concurrents.
  */
 void lock_filesystem() {
     int fd = fileno(fs.file);  // Obtenir le descripteur de fichier
@@ -1276,7 +1527,12 @@ void unlock_filesystem() {
     flock(fd, LOCK_UN);  // Libérer le verrou
 }
 
-//verification de la partition filesystem.img
+
+/**
+ * @brief Affiche l'état actuel du système de fichiers (inodes et répertoire courant).
+ *
+ * @param current_dir Inode du répertoire courant.
+ */
 void display_filesystem(int current_dir) {
     Directory dir = fs.directories[current_dir];
 
@@ -1312,7 +1568,13 @@ void display_filesystem(int current_dir) {
 }
 
 
-// Fonction pour changer le répertoire courant
+/**
+ * @brief Change le répertoire courant en suivant le chemin spécifié.
+ *
+ * @param path Chemin absolu ou relatif vers le nouveau répertoire.
+ * @param inode_dir Inode du répertoire actuel.
+ * @return Inode du nouveau répertoire courant ou l'inode initial en cas d'erreur.
+ */
 int changerRep(char *path, int inode_dir){
 
     int inode = get_inode_from_path(path, inode_dir);
@@ -1333,34 +1595,43 @@ int changerRep(char *path, int inode_dir){
 
 
 
+/**
+ * @brief Affiche le message d'aide décrivant les commandes disponibles.
+ */
 void print_help() {
     printf("Mini Gestionnaire de Fichiers\n");
     printf("Usage: ./filesystem [OPTIONS]\n\n");
+
     printf("Options:\n");
     printf("  --help           Affiche ce message d'aide\n");
     printf("  --init           Force une nouvelle initialisation du système de fichiers\n\n");
-    printf("Commandes disponibles en mode interactif:\n");
-    printf("  ls               Lister les fichiers du répertoire courant\n");
-    printf("  cd <path>         Changer de répertoire\n");
-    printf("  mkdir <dir>      Créer un répertoire\n");
-    printf("  touch <file>     Créer un fichier\n");
-    printf("  rm <file>        Supprimer un fichier\n");
-    printf("  remdir <dir>      Supprimer un répertoire récursivement\n");
-    printf("  cp <src> <newname> <dest_path>  Copier un fichier\n");
-    printf("  mv <src> <dest_path>  Déplacer un fichier\n");
-    printf("  ln <filename> <linkname> <target_path>  Créer un lien dur\n");
-    printf("  sym <path> <linkname>  Créer un lien symbolique\n");
-    printf("  stat <file>      Afficher les infos d'un fichier\n");
-    printf("  open <file>      Ouvre un fichier\n");
-    printf("  close <desc>     Ferme un fichier\n");
-    printf("  wfile <desc> <texte> <size> Ecrit dans un fichier\n");
-    printf("  rfile <desc> <size>      Lit size octet dans un fichier\n");
-    printf("  sfile <desc> <offset> <whence>  Deplace la tete de lecture\n");
-    printf("  list_desc        Affiche les descripteur ouvert\n");
-    printf("  pwd              Afficher le répertoire courant\n");
-    printf("  exit             Quitter le programme\n");
+
+    printf("Commandes disponibles en mode interactif :\n");
+    printf("  cd <path>                        Changer de répertoire\n");
+    printf("  chmod <fichier> <perms>          Modifier les permissions (ex: rwx, r--, etc.)\n");
+    printf("  cp <src> <newname> <dest_path>   Copier un fichier ou répertoire\n");
+    printf("  exit                             Quitter le programme\n");
+    printf("  help                             Afficher ce message d'aide\n");
+    printf("  ln <filename> <linkname> <path>  Créer un lien dur vers un fichier\n");
+    printf("  ls                               Lister les fichiers du répertoire courant\n");
+    printf("  mkdir <dir>                      Créer un répertoire\n");
+    printf("  mv <src> <dest_path>             Déplacer un fichier ou répertoire\n");
+    printf("  pwd                              Afficher le répertoire courant\n");
+    printf("  remdir <dir>                     Supprimer un répertoire récursivement\n");
+    printf("  rm <file>                        Supprimer un fichier\n");
+    printf("  rfile <filename>                 Afficher le contenu d'un fichier\n");
+    printf("  stat <file>                      Afficher les informations d'un fichier ou répertoire\n");
+    printf("  sym <target_path> <linkname>     Créer un lien symbolique\n");
+    printf("  touch <file>                     Créer un fichier vide\n");
+    printf("  wfile <filename> <texte> <mode>  Écrire dans un fichier (modes: add, rewrite)\n");
 }
 
+
+/**
+ * @brief Affiche le prompt avec le chemin complet du répertoire courant.
+ *
+ * @param current_dir Inode du répertoire courant.
+ */
 void print_prompt(int current_dir) {
     // Augmenter la taille du buffer pour le chemin
     char path[2048] = "";  // Augmenté de 1024 à 2048
@@ -1405,8 +1676,15 @@ void print_prompt(int current_dir) {
     printf("%s> ", path);
     fflush(stdout);
 }
-// Fonction pour générer le chemin complet
-// Fonction pour générer le chemin complet en toute sécurité
+
+
+/**
+ * @brief Génère le chemin complet à partir de l'inode du répertoire courant.
+ *
+ * @param current_dir Inode du répertoire courant.
+ * @param path Buffer où stocker le chemin généré.
+ * @param path_size Taille du buffer fourni.
+ */
 void generate_full_path(int current_dir, char *path, size_t path_size) {
     if (!path || path_size == 0) return; // Vérifier les paramètres
 
@@ -1446,7 +1724,9 @@ void generate_full_path(int current_dir, char *path, size_t path_size) {
     }
 }
 
-// Fonction qui liste les descripeurs de fichier
+/**
+ * @brief Affiche les descripteurs de fichiers actuellement ouverts.
+ */
 void print_desc(){
     for (int i = 0; i < MAX_FILE_OPEN ; i++){
         if (fs.opened_file[i].inode != -1){
@@ -1456,7 +1736,11 @@ void print_desc(){
 }
 
 
-
+/**
+ * @brief Liste le contenu du répertoire courant avec détails (permissions, type, taille).
+ *
+ * @param current_dir Inode du répertoire courant.
+ */
 void list_directory(int current_dir) {
     Directory dir = fs.directories[current_dir];
     printf("Contenu du répertoire :\n");
@@ -1485,6 +1769,12 @@ void list_directory(int current_dir) {
     }
 }
 
+/**
+ * @brief Affiche les informations détaillées sur un fichier ou répertoire.
+ *
+ * @param filename Nom du fichier ou répertoire à examiner.
+ * @param current_dir Inode du répertoire courant.
+ */
 void print_file_info(const char *filename, int current_dir) {
     int inode = rechInode(filename, fs.directories[current_dir]);
     if (inode == -1) {
@@ -1506,6 +1796,14 @@ void print_file_info(const char *filename, int current_dir) {
     printf("  Modifié le: %s", ctime(&node->modification_time));
 }
 
+
+
+/**
+ * @brief Lance le shell interactif du gestionnaire de fichiers.
+ *
+ * @param force_init Force la réinitialisation du système de fichiers si non nul.
+ * @return Code de sortie du shell interactif.
+ */
 int interactive_shell(int force_init) {
     if (force_init) {
         printf("Initialisation forcée du système de fichiers...\n");
@@ -1653,6 +1951,7 @@ int interactive_shell(int force_init) {
                     printf("Erreur lors de la création du lien symbolique\n");
                 }
                 save_filesystem("filesystem.img");
+            /**
             } else if (sscanf(command, "open %s", arg1) == 1){
                 int fd = open_file(arg1, current_dir);
                 if (fd == -1){
@@ -1661,31 +1960,116 @@ int interactive_shell(int force_init) {
                     printf("Nouveau descripteur pour le fichier %s : %d\n", arg1, fd);
                 }
                 save_filesystem("filesystem.img");
+            */
+            /**
             } else if (sscanf(command, "close %s", arg1) == 1){
                 close_file(atoi(arg1));
                 save_filesystem("filesystem.img");
+            */
+            /**
             } else if (sscanf(command, "sfile %s %s %s ", arg1, arg2, arg3) == 3){
                 seek_file(atoi(arg1), atoi(arg2), atoi(arg3));
                 save_filesystem("filesystem.img");
-            } else if (sscanf(command, "rfile %s %s", arg1, arg2) == 2){
+            */
+            } else if (sscanf(command, "rfile %s", arg1) == 1){
+                int inode = rechInode(arg1, fs.directories[current_dir]);
+                if(inode == -1){
+                    printf("Erreur : fichier non existant\n");
+                } else {
+                    if(fs.inodes[inode].type == 1){
+                        int fd = open_file(arg1, current_dir);
+                        int size = fs.inodes[fs.opened_file[fd].inode].size;
+                        seek_file(fd, 0, 0);
+                        char texte[size+1];
+                        read_file(fd, texte, size);
+                        printf("contenu du fichier : %s\n", texte);
+                        save_filesystem("filesystem.img");
+                    } else if(fs.inodes[inode].type == 2){
+                        char path[fs.inodes[inode].size + 1];
+                        int fd = open_file(arg1, current_dir);
+                        //int size = fs.inodes[fs.opened_file[fd].inode].size;
+                        seek_file(fd, 0, 0);
+                        read_file(fd, path, fs.inodes[inode].size);
+                        close(fd);
+                        printf("path : %s\n", path);
+                        int inode_target = get_inode_from_path(path, current_dir);
+                        int rep_parent = fs.inodes[inode_target].inode_rep_parent;
+                        int stop = 0;
+                        char filename[MAX_FILE_NAME];
+                        int i = 0;
+                        while(i<NUM_DIRECTORY_ENTRIES && !stop){
+                            if(fs.directories[rep_parent].entries[i].inode_index == inode_target){
+                                strncpy(filename, fs.directories[rep_parent].entries[i].filename, strlen(fs.directories[rep_parent].entries[i].filename));
+                                stop = 1;
+                            }
+                            i++;
+                        }
+                        filename[strlen(fs.directories[rep_parent].entries[i-1].filename)] = '\0';
+                        printf("filename : %s\n", filename);
+                        printf("inode rep parent : %d \n", rep_parent);
+                        fd = open_file(filename, rep_parent);
+                        int size = fs.inodes[fs.opened_file[fd].inode].size;
+                        seek_file(fd, 0, 0);
+                        char texte[size+1];
+                        read_file(fd, texte, size);
+                        printf("contenu du fichier : %s\n", texte);
+                        save_filesystem("filesystem.img");
+                    } else if(fs.inodes[inode].type == 0) {
+                        printf("Erreur : tentation de lecture d'un répertoire\n");
+                    } else {
+                        printf("Erreur : type de fichier non reconnu\n");
+                    }
+                }
+                /**
                 char texte[atoi(arg2)+1];
                 read_file(atoi(arg1), texte, atoi(arg2));
                 texte[atoi(arg2)] = '\0';
                 printf("contenu du fichier : %s\n", texte);
                 save_filesystem("filesystem.img");
+                */
             } else if (sscanf(command, "wfile %s %s %s", arg1, arg2, arg3) == 3){
-                write_file(atoi(arg1), arg2, atoi(arg3));
+                // write_file(atoi(arg1), arg2, atoi(arg3));
+                if(strcmp(arg3, "add") == 0){
+                    int fd = open_file(arg1, current_dir);
+                    int size = strlen(arg2);
+                    seek_file(fd, 0, 1);
+                    write_file(fd, arg2, size);
+                    close_file(fd);
+                } else if (strcmp(arg3, "rewrite") == 0){
+                    int fd = open_file(arg1, current_dir);
+                    int size = strlen(arg2);
+                    seek_file(fd, 0, 0);
+                    write_file(fd, arg2, size);
+                    close_file(fd);
+                } else {
+                    printf("mode d'écriture non reconnu\n");
+                }
                 save_filesystem("filesystem.img");
+            /**
             } else if (sscanf(command, "list_desc") == 0){
                 print_desc();
                 save_filesystem("filesystem.img");
+            */
             } else if (sscanf(command, "stat %s", arg1) == 1) {
                 print_file_info(arg1, current_dir);
                 save_filesystem("filesystem.img");
+
+            } else if (sscanf(command, "chmod %s %s", arg1, arg2) == 2) {
+                // arg1 = nom du fichier/répertoire, arg2 = nouvelles permissions
+                if (change_permissions(arg1, arg2, current_dir) == -1) {
+                    printf("Erreur : impossible de modifier les permissions.\n");
+                }
+                save_filesystem("filesystem.img");
+            
+            //} else if (strlen(command) > 0) {
+                // ...
+            
+            
             } else if (strlen(command) > 0) {
                 printf("Commande inconnue: %s\n", command);
                 save_filesystem("filesystem.img");
             }
+            
         }
     }
     
