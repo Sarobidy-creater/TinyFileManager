@@ -1,0 +1,73 @@
+// creation fichier
+touch fichier1.txt
+
+// creation repertoire
+mkdir rep1
+
+// afficher le contenu du répertoire courant
+ls
+
+// se deplacer dans le repertoire
+cd rep1
+
+// se deplacer dans le repertoire parent
+cd ../
+
+// ecriture dans un fichier (mode "add" pour ajouter a la fin, "rewrite" pour ecraser le contenu)
+wfile fichier1.txt add abcdef
+
+// lire un fichier
+rfile fichier1.txt
+
+// copier fichier
+cp fichier1.txt fichier2.txt rep1
+
+// copier un repertoire
+cp rep1 rep2 ./
+
+// deplacer un fichier
+mv fichier1.txt rep1
+
+// deplacer un repertoire
+mv rep1 rep2
+
+// entrer dans le repertoire rep2
+cd rep2
+
+// supprimer un fichier
+rm fichier1.txt
+
+// supprimer un repertoire
+remdir rep1
+
+// creer un lien dur de fichier2 vers le repertoire parent
+ln fichier2.txt liendur2 ../
+
+// revenir au repertoire parent
+cd ../
+
+// creer un lien symbolique qui pointe vers le fichier2
+sym rep2/fichier2.txt liensym2
+
+// lire les liens créé
+rfile liendur2
+rfile liensym2
+
+// se deplacer dans le repertoire rep2
+cd rep2
+
+// changer les modifications + test
+chmod fichier2.txt ---
+wfile fichier2.txt add test
+rfile fichier2.txt
+
+chmod fichier2.txt rwx
+rfile fichier2.txt
+wfile fichier2.txt add test
+rfile fichier2.txt
+
+// afficher les informations sur le fichier fichier2
+stat fichier2.txt
+
+// quitter le système
+exit

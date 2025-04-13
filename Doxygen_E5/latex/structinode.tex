@@ -1,0 +1,93 @@
+\doxysection{inode Struct Reference}
+\hypertarget{structinode}{}\label{structinode}\index{inode@{inode}}
+
+
+Représente un inode dans le système de fichiers simulé.  
+
+
+\doxysubsubsection*{Data Fields}
+\begin{DoxyCompactItemize}
+\item 
+int \mbox{\hyperlink{structinode_a7441ef0865bcb3db9b8064dd7375c1ea}{id}}
+\item 
+int \mbox{\hyperlink{structinode_ac765329451135abec74c45e1897abf26}{type}}
+\item 
+int \mbox{\hyperlink{structinode_a439227feff9d7f55384e8780cfc2eb82}{size}}
+\item 
+time\+\_\+t \mbox{\hyperlink{structinode_ac308713211f3592e4636ce1081aeb859}{creation\+\_\+time}}
+\item 
+time\+\_\+t \mbox{\hyperlink{structinode_adc17efb6991d03e6934c225e62f2aa79}{modification\+\_\+time}}
+\item 
+char \mbox{\hyperlink{structinode_a4b056797523e69e78a381a7529d361c5}{permissions}} \mbox{[}3\mbox{]}
+\item 
+int \mbox{\hyperlink{structinode_a3ed9fd08e687372ecba43ecba59a177a}{blocks}} \mbox{[}NUM\+\_\+\+BLOCKS\mbox{]}
+\item 
+int \mbox{\hyperlink{structinode_afcb00fd4999119305a9e92c6a003f2af}{link\+\_\+count}}
+\item 
+int \mbox{\hyperlink{structinode_a49b3fc84041158468c5489df0dfe9011}{inode\+\_\+rep\+\_\+parent}}
+\end{DoxyCompactItemize}
+
+
+\doxysubsection{Detailed Description}
+Représente un inode dans le système de fichiers simulé. 
+
+\doxysubsection{Field Documentation}
+\Hypertarget{structinode_a3ed9fd08e687372ecba43ecba59a177a}\index{inode@{inode}!blocks@{blocks}}
+\index{blocks@{blocks}!inode@{inode}}
+\doxysubsubsection{\texorpdfstring{blocks}{blocks}}
+{\footnotesize\ttfamily \label{structinode_a3ed9fd08e687372ecba43ecba59a177a} 
+int blocks\mbox{[}NUM\+\_\+\+BLOCKS\mbox{]}}
+
+Tableau des indices des blocs de données associés \Hypertarget{structinode_ac308713211f3592e4636ce1081aeb859}\index{inode@{inode}!creation\_time@{creation\_time}}
+\index{creation\_time@{creation\_time}!inode@{inode}}
+\doxysubsubsection{\texorpdfstring{creation\_time}{creation\_time}}
+{\footnotesize\ttfamily \label{structinode_ac308713211f3592e4636ce1081aeb859} 
+time\+\_\+t creation\+\_\+time}
+
+Date et heure de création du fichier \Hypertarget{structinode_a7441ef0865bcb3db9b8064dd7375c1ea}\index{inode@{inode}!id@{id}}
+\index{id@{id}!inode@{inode}}
+\doxysubsubsection{\texorpdfstring{id}{id}}
+{\footnotesize\ttfamily \label{structinode_a7441ef0865bcb3db9b8064dd7375c1ea} 
+int id}
+
+Identifiant unique de l\textquotesingle{}inode \Hypertarget{structinode_a49b3fc84041158468c5489df0dfe9011}\index{inode@{inode}!inode\_rep\_parent@{inode\_rep\_parent}}
+\index{inode\_rep\_parent@{inode\_rep\_parent}!inode@{inode}}
+\doxysubsubsection{\texorpdfstring{inode\_rep\_parent}{inode\_rep\_parent}}
+{\footnotesize\ttfamily \label{structinode_a49b3fc84041158468c5489df0dfe9011} 
+int inode\+\_\+rep\+\_\+parent}
+
+Indice de l\textquotesingle{}inode du répertoire parent \Hypertarget{structinode_afcb00fd4999119305a9e92c6a003f2af}\index{inode@{inode}!link\_count@{link\_count}}
+\index{link\_count@{link\_count}!inode@{inode}}
+\doxysubsubsection{\texorpdfstring{link\_count}{link\_count}}
+{\footnotesize\ttfamily \label{structinode_afcb00fd4999119305a9e92c6a003f2af} 
+int link\+\_\+count}
+
+Nombre de liens durs vers cet inode \Hypertarget{structinode_adc17efb6991d03e6934c225e62f2aa79}\index{inode@{inode}!modification\_time@{modification\_time}}
+\index{modification\_time@{modification\_time}!inode@{inode}}
+\doxysubsubsection{\texorpdfstring{modification\_time}{modification\_time}}
+{\footnotesize\ttfamily \label{structinode_adc17efb6991d03e6934c225e62f2aa79} 
+time\+\_\+t modification\+\_\+time}
+
+Date et heure de dernière modification \Hypertarget{structinode_a4b056797523e69e78a381a7529d361c5}\index{inode@{inode}!permissions@{permissions}}
+\index{permissions@{permissions}!inode@{inode}}
+\doxysubsubsection{\texorpdfstring{permissions}{permissions}}
+{\footnotesize\ttfamily \label{structinode_a4b056797523e69e78a381a7529d361c5} 
+char permissions\mbox{[}3\mbox{]}}
+
+Permissions (r\+: lecture, w\+: écriture, x\+: exécution) \Hypertarget{structinode_a439227feff9d7f55384e8780cfc2eb82}\index{inode@{inode}!size@{size}}
+\index{size@{size}!inode@{inode}}
+\doxysubsubsection{\texorpdfstring{size}{size}}
+{\footnotesize\ttfamily \label{structinode_a439227feff9d7f55384e8780cfc2eb82} 
+int size}
+
+Taille du fichier (en octets) \Hypertarget{structinode_ac765329451135abec74c45e1897abf26}\index{inode@{inode}!type@{type}}
+\index{type@{type}!inode@{inode}}
+\doxysubsubsection{\texorpdfstring{type}{type}}
+{\footnotesize\ttfamily \label{structinode_ac765329451135abec74c45e1897abf26} 
+int type}
+
+Type d\textquotesingle{}inode \+: 0 = répertoire, 1 = fichier, 2 = lien symbolique 
+
+The documentation for this struct was generated from the following file\+:\begin{DoxyCompactItemize}
+\item 
+C\+:/\+Users/irint/\+Desktop/\+System\+Projet\+Os/cmd\+V6.\+c\end{DoxyCompactItemize}

@@ -1,71 +1,133 @@
 
-# TinyFileManager
+# Mini Système de Fichiers en C
 
-TinyFileManager is a miniature in-memory file system simulation written in C, designed for educational purposes. It mimics the structure and behavior of a basic file system, including inodes, directories, file operations, and symbolic and hard links.
+## Présentation
 
-## Features
+Ce projet consiste en la réalisation d’un simulateur de système de fichiers en langage C, développé dans le cadre du cursus **Licence 3 Informatique**. Il permet de simuler un système complet de gestion de fichiers et répertoires, incluant la création, suppression, déplacement, copie d’éléments, gestion des permissions, des liens symboliques et durs, ainsi que la lecture et écriture dans les fichiers simulés.
 
-- Inode-based architecture
-- Support for:
-  - Regular files
-  - Directories
-  - Hard links
-  - Symbolic links
-- File operations:
-  - Create, delete, read, write, open, close, seek
-  - Copy and move files and directories
-- Command-line interface with interactive shell
-- File permissions (`r`, `w`, `x`)
-- Persistent state via binary file (`filesystem.img`)
-- Path resolution with support for relative and absolute paths
+Toutes les opérations sont effectuées sur un fichier binaire (`filesystem.img`), sans impacter le système réel de la machine. Le système inclut un fichier de log (`log.txt`) qui enregistre toutes les opérations effectuées pour faciliter le suivi et la gestion des erreurs.
 
-## File Structure
+## Équipe Projet
 
-- `TinyFileManager.c` – The main source file containing all logic for the simulated file system.
+- **Meriem BOUAZZAOUI** (31%)
+- **Eliarisoa ANDRIANTSITOHAINA** (33%)
+- **Mario RAZAFINONY** (36%)
 
-## Getting Started
+## Contenu de l'archive
 
-### Compilation
+L’archive compressée (au format tar compressé `.tgz`) contient exclusivement les éléments suivants :
+
+- `filesystem.c` — Code source principal du système de fichiers, détaillé et commenté.
+- `Makefile` — Automatisation de la compilation et installation.
+- `README.md` — Guide d’installation et utilisation du logiciel (ce document).
+- Un document PDF décrivant les choix des structures de données et algorithmes utilisés.
+
+---
+
+## Guide d’installation
+
+### Prérequis
+
+- Système UNIX/Linux
+- Compilateur C (recommandé : `gcc`)
+
+### Compilation et installation
+
+Depuis le répertoire contenant les fichiers sources, lancez :
 
 ```bash
-gcc -o filesystem TinyFileManager.c
+make
 ```
 
-### Usage
+Pour installer le logiciel (assurez-vous d’avoir les droits nécessaires) :
 
 ```bash
-./filesystem [-i]
+make install
 ```
 
-- `-i`: Force initialization of the file system.
+---
 
-### Interactive Commands
+## Lancement et utilisation
 
-- `ls` — List current directory
-- `cd <path>` — Change directory
-- `mkdir <dir>` — Create a new directory
-- `touch <file>` — Create a new file
-- `rm <file>` — Delete a file
-- `remdir <dir>` — Recursively delete a directory
-- `cp <src> <newname> <dest_path>` — Copy a file or directory
-- `mv <src> <dest_path>` — Move a file or directory
-- `ln <filename> <linkname> <target_path>` — Create a hard link
-- `sym <path> <linkname>` — Create a symbolic link
-- `open <file>` / `close <desc>` — Open or close file descriptors
-- `wfile <desc> <text> <size>` — Write to a file
-- `rfile <desc> <size>` — Read from a file
-- `sfile <desc> <offset> <whence>` — Move file read/write head
-- `stat <file>` — Show file info
-- `list_desc` — List open file descriptors
-- `pwd` — Print current directory
-- `exit` — Quit the shell
+### Initialisation d’un nouveau système
 
-## Notes
+```bash
+./filesystem --i
+```
 
-- The simulated file system is stored in a binary file named `filesystem.img`.
-- Inodes and blocks are managed in-memory and persisted upon saving.
-- Ideal for understanding the fundamentals of file system implementation.
+### Chargement du système existant
 
-## License
+```bash
+./filesystem
+```
 
-MIT License
+---
+
+## Commandes disponibles
+
+| Commande | Description |
+|---|---|
+| `help` | Affiche l'aide |
+| `ls` | Liste le contenu du répertoire courant |
+| `pwd` | Affiche le répertoire courant |
+| `cd <path>` | Change de répertoire |
+| `mkdir <dir>` | Crée un nouveau répertoire |
+| `touch <file>` | Crée un fichier vide |
+| `rm <file>` | Supprime un fichier |
+| `remdir <dir>` | Supprime un répertoire (récursif) |
+| `cp <src> <newname> <dest_path>` | Copie un fichier ou répertoire |
+| `mv <src> <dest_path>` | Déplace un fichier ou répertoire |
+| `ln <filename> <linkname> <target_path>` | Crée un lien dur |
+| `sym <target_path> <linkname>` | Crée un lien symbolique |
+| `stat <file>` | Affiche les infos détaillées d’un fichier |
+| `chmod <file> <permissions>` | Modifie les permissions |
+| `wfile <filename> <mode> <texte>` | Écrit dans un fichier (`add` ou `rewrite`) |
+| `rfile <filename>` | Lit et affiche le contenu du fichier |
+| `exit` | Quitte et sauvegarde l'état du système |
+
+---
+
+## Structure des données principales
+
+- `Inode` : Gestion des métadonnées (type, taille, permissions, timestamps, blocs associés).
+- `DirectoryEntry` et `Directory` : Gestion du contenu des répertoires.
+- `OpenFile` : Gestion des fichiers ouverts (positions de lecture/écriture).
+
+---
+
+## Logging et gestion d'erreurs
+
+Toutes les opérations sont journalisées dans un fichier texte (`log.txt`). Ce fichier contient des entrées détaillées pour chaque opération, facilitant ainsi le débogage et la traçabilité.
+
+Exemple d'entrée de log :
+
+```
+[Fichier créé] Nom : exemple.txt, Permissions : rwx, Répertoire parent : inode 2
+```
+
+Les erreurs critiques sont également affichées sur la sortie standard pour alerter immédiatement l'utilisateur.
+
+---
+
+## Exemple de structure initiale
+
+Après initialisation, voici la structure de base du système simulé :
+
+```
+/
+├── home/ (répertoire courant par défaut)
+└── usr/
+    └── local/
+```
+
+---
+
+## Remarques importantes
+
+- **Simulation complète** : Aucun impact sur votre système de fichiers réel.
+- **Sauvegarde automatique** : L'état est sauvegardé après chaque opération.
+- **Gestion de la concurrence** : Utilisation du verrouillage pour gérer les accès simultanés de manière sécurisée.
+
+---
+
+© Projet académique – Licence 3 Informatique – 2024/2025

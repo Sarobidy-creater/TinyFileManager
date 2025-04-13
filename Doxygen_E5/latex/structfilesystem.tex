@@ -1,0 +1,85 @@
+\doxysection{filesystem Struct Reference}
+\hypertarget{structfilesystem}{}\label{structfilesystem}\index{filesystem@{filesystem}}
+
+
+Représente l\textquotesingle{}ensemble du système de fichiers simulé.  
+
+
+\doxysubsubsection*{Data Fields}
+\begin{DoxyCompactItemize}
+\item 
+FILE \texorpdfstring{$\ast$}{*} \mbox{\hyperlink{structfilesystem_a702945180aa732857b380a007a7e2a21}{file}}
+\item 
+FILE \texorpdfstring{$\ast$}{*} \mbox{\hyperlink{structfilesystem_ad033d05e078fa433531dcadea106749f}{log}}
+\item 
+\mbox{\hyperlink{structinode}{Inode}} \mbox{\hyperlink{structfilesystem_ad351ab6a6c534a128cfef45919906c5e}{inodes}} \mbox{[}NUM\+\_\+\+INODES\mbox{]}
+\item 
+\mbox{\hyperlink{structdirectory}{Directory}} \mbox{\hyperlink{structfilesystem_a31ef2fe8372bbca79b2b1a812f2f698d}{root\+\_\+dir}}
+\item 
+\mbox{\hyperlink{structdirectory}{Directory}} \mbox{\hyperlink{structfilesystem_ac92d0467c7e08f46a1f36999ec38bb6a}{directories}} \mbox{[}NUM\+\_\+\+INODES\mbox{]}
+\item 
+int \mbox{\hyperlink{structfilesystem_abfe9a8d4560a0cb7f9a7529fc95f416b}{free\+\_\+blocks}} \mbox{[}NUM\+\_\+\+BLOCKS\mbox{]}
+\item 
+int \mbox{\hyperlink{structfilesystem_a57f912684d2326df873c432221525ec6}{current\+\_\+dir}}
+\item 
+\mbox{\hyperlink{struct_open_file}{Open\+File}} \mbox{\hyperlink{structfilesystem_a61b0f60c145838c55894e95ce8620040}{opened\+\_\+file}} \mbox{[}MAX\+\_\+\+FILE\+\_\+\+OPEN\mbox{]}
+\end{DoxyCompactItemize}
+
+
+\doxysubsection{Detailed Description}
+Représente l\textquotesingle{}ensemble du système de fichiers simulé. 
+
+\doxysubsection{Field Documentation}
+\Hypertarget{structfilesystem_a57f912684d2326df873c432221525ec6}\index{filesystem@{filesystem}!current\_dir@{current\_dir}}
+\index{current\_dir@{current\_dir}!filesystem@{filesystem}}
+\doxysubsubsection{\texorpdfstring{current\_dir}{current\_dir}}
+{\footnotesize\ttfamily \label{structfilesystem_a57f912684d2326df873c432221525ec6} 
+int current\+\_\+dir}
+
+Indice de l\textquotesingle{}inode du répertoire courant \Hypertarget{structfilesystem_ac92d0467c7e08f46a1f36999ec38bb6a}\index{filesystem@{filesystem}!directories@{directories}}
+\index{directories@{directories}!filesystem@{filesystem}}
+\doxysubsubsection{\texorpdfstring{directories}{directories}}
+{\footnotesize\ttfamily \label{structfilesystem_ac92d0467c7e08f46a1f36999ec38bb6a} 
+\mbox{\hyperlink{structdirectory}{Directory}} directories\mbox{[}NUM\+\_\+\+INODES\mbox{]}}
+
+Tableau des répertoires indexés par les indices d\textquotesingle{}inodes \Hypertarget{structfilesystem_a702945180aa732857b380a007a7e2a21}\index{filesystem@{filesystem}!file@{file}}
+\index{file@{file}!filesystem@{filesystem}}
+\doxysubsubsection{\texorpdfstring{file}{file}}
+{\footnotesize\ttfamily \label{structfilesystem_a702945180aa732857b380a007a7e2a21} 
+FILE\texorpdfstring{$\ast$}{*} file}
+
+Fichier simulant la partition sur disque \Hypertarget{structfilesystem_abfe9a8d4560a0cb7f9a7529fc95f416b}\index{filesystem@{filesystem}!free\_blocks@{free\_blocks}}
+\index{free\_blocks@{free\_blocks}!filesystem@{filesystem}}
+\doxysubsubsection{\texorpdfstring{free\_blocks}{free\_blocks}}
+{\footnotesize\ttfamily \label{structfilesystem_abfe9a8d4560a0cb7f9a7529fc95f416b} 
+int free\+\_\+blocks\mbox{[}NUM\+\_\+\+BLOCKS\mbox{]}}
+
+Tableau indiquant l\textquotesingle{}état libre ou occupé des blocs de données \Hypertarget{structfilesystem_ad351ab6a6c534a128cfef45919906c5e}\index{filesystem@{filesystem}!inodes@{inodes}}
+\index{inodes@{inodes}!filesystem@{filesystem}}
+\doxysubsubsection{\texorpdfstring{inodes}{inodes}}
+{\footnotesize\ttfamily \label{structfilesystem_ad351ab6a6c534a128cfef45919906c5e} 
+\mbox{\hyperlink{structinode}{Inode}} inodes\mbox{[}NUM\+\_\+\+INODES\mbox{]}}
+
+Tableau contenant tous les inodes du système \Hypertarget{structfilesystem_ad033d05e078fa433531dcadea106749f}\index{filesystem@{filesystem}!log@{log}}
+\index{log@{log}!filesystem@{filesystem}}
+\doxysubsubsection{\texorpdfstring{log}{log}}
+{\footnotesize\ttfamily \label{structfilesystem_ad033d05e078fa433531dcadea106749f} 
+FILE\texorpdfstring{$\ast$}{*} log}
+
+Fichier de logs pour les opérations du système \Hypertarget{structfilesystem_a61b0f60c145838c55894e95ce8620040}\index{filesystem@{filesystem}!opened\_file@{opened\_file}}
+\index{opened\_file@{opened\_file}!filesystem@{filesystem}}
+\doxysubsubsection{\texorpdfstring{opened\_file}{opened\_file}}
+{\footnotesize\ttfamily \label{structfilesystem_a61b0f60c145838c55894e95ce8620040} 
+\mbox{\hyperlink{struct_open_file}{Open\+File}} opened\+\_\+file\mbox{[}MAX\+\_\+\+FILE\+\_\+\+OPEN\mbox{]}}
+
+Tableau des fichiers actuellement ouverts indexés par descripteur \Hypertarget{structfilesystem_a31ef2fe8372bbca79b2b1a812f2f698d}\index{filesystem@{filesystem}!root\_dir@{root\_dir}}
+\index{root\_dir@{root\_dir}!filesystem@{filesystem}}
+\doxysubsubsection{\texorpdfstring{root\_dir}{root\_dir}}
+{\footnotesize\ttfamily \label{structfilesystem_a31ef2fe8372bbca79b2b1a812f2f698d} 
+\mbox{\hyperlink{structdirectory}{Directory}} root\+\_\+dir}
+
+Répertoire racine 
+
+The documentation for this struct was generated from the following file\+:\begin{DoxyCompactItemize}
+\item 
+C\+:/\+Users/irint/\+Desktop/\+System\+Projet\+Os/cmd\+V6.\+c\end{DoxyCompactItemize}
